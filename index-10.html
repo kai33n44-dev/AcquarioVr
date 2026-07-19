@@ -1,0 +1,652 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>SISTEMA // ascensore</title>
+<style>
+  :root{ --green:#39ff8a; --green-dim:#1c7a45; --amber:#ffb020; --red:#ff5050; }
+  *{ box-sizing:border-box; -webkit-tap-highlight-color:transparent; user-select:none; }
+  html,body{ margin:0; padding:0; height:100%; overflow:hidden; background:#000;
+    font-family:"Courier New",Consolas,monospace; color:var(--green); }
+  #three-canvas{ position:fixed; inset:0; display:block; }
+
+  #scanlines{ position:fixed; inset:0; z-index:15; pointer-events:none;
+    background:repeating-linear-gradient(to bottom, rgba(0,0,0,0) 0px, rgba(0,0,0,0) 2px, rgba(0,0,0,0.15) 3px);
+    mix-blend-mode:multiply; }
+  #vignette{ position:fixed; inset:0; z-index:16; pointer-events:none;
+    box-shadow: inset 0 0 160px 50px rgba(0,0,0,0.8); }
+
+  #hud{ position:fixed; inset:0; z-index:12; pointer-events:none; display:none; }
+  #crosshair{ position:absolute; top:50%; left:50%; width:6px; height:6px; margin:-3px 0 0 -3px;
+    border-radius:50%; background:rgba(57,255,138,0.8); box-shadow:0 0 6px var(--green); }
+  #prompt{ position:absolute; top:58%; left:50%; transform:translateX(-50%);
+    font-size:13px; background:rgba(2,10,5,0.75); border:1px solid var(--green-dim);
+    padding:6px 12px; border-radius:3px; opacity:0; transition:opacity .15s; white-space:nowrap; }
+  #prompt.show{ opacity:1; }
+  #instructions{ position:absolute; top:14px; left:50%; transform:translateX(-50%);
+    font-size:11px; letter-spacing:1px; color:var(--green-dim); text-align:center;
+    background:rgba(2,10,5,0.5); padding:6px 14px; border-radius:3px; }
+  #keycount{ position:absolute; top:14px; left:14px; font-size:12px; letter-spacing:1px;
+    background:rgba(2,10,5,0.6); border:1px solid var(--green-dim); padding:6px 12px; border-radius:3px; }
+
+  #toast{ position:fixed; bottom:60px; left:50%; transform:translateX(-50%); z-index:22;
+    background:rgba(2,10,5,0.9); border:1px solid var(--green-dim); padding:10px 16px; border-radius:4px;
+    font-size:13px; opacity:0; transition:opacity .25s; pointer-events:none; max-width:80vw; text-align:center; }
+  #toast.show{ opacity:1; }
+
+  .overlay-screen{ position:fixed; inset:0; z-index:30; display:flex; align-items:center; justify-content:center;
+    padding:20px; background:rgba(0,0,0,0.55); }
+  .term{ background:rgba(2,10,5,0.88); border:1px solid var(--green-dim); border-radius:4px;
+    box-shadow:0 0 24px rgba(57,255,138,0.1), inset 0 0 40px rgba(0,0,0,0.6);
+    padding:22px 24px; max-width:460px; width:100%; }
+  .bar{ display:flex; justify-content:space-between; font-size:11px; letter-spacing:2px;
+    color:var(--green-dim); border-bottom:1px dashed var(--green-dim); padding-bottom:8px; margin-bottom:14px;
+    text-transform:uppercase; }
+  h1,h2{ font-weight:normal; letter-spacing:1px; text-shadow:0 0 8px rgba(57,255,138,.6); margin:0 0 12px; }
+  h1{ font-size:20px; } h2{ font-size:16px; }
+  p{ line-height:1.6; font-size:13.5px; margin:0 0 12px; }
+  .dim{ color:var(--green-dim); } .amber{ color:var(--amber); }
+  .cursor{ display:inline-block; width:8px; height:14px; background:var(--green);
+    animation:blink 1s steps(1) infinite; vertical-align:middle; margin-left:2px; }
+  @keyframes blink{ 50%{opacity:0;} }
+  button{ font-family:inherit; background:transparent; color:var(--green); border:1px solid var(--green-dim);
+    padding:10px 14px; margin:4px 6px 0 0; cursor:pointer; font-size:13px; border-radius:2px;
+    transition:all .15s ease; pointer-events:all; }
+  button:hover{ background:var(--green); color:#001a0d; box-shadow:0 0 14px rgba(57,255,138,.5); }
+
+  #disconnect{ position:fixed; inset:0; z-index:50; background:#000; display:flex; align-items:center; justify-content:center;
+    opacity:0; pointer-events:none; transition:opacity .4s ease; }
+  #disconnect.show{ opacity:1; }
+  .disconnect-text{ font-size:clamp(20px,6vw,44px); color:var(--amber); letter-spacing:4px; text-align:center;
+    text-shadow:0 0 20px rgba(255,176,32,.7); animation:glitchText .4s infinite; }
+  @keyframes glitchText{
+    0%{transform:translate(0);opacity:1;} 20%{transform:translate(-3px,2px);opacity:.8;}
+    40%{transform:translate(3px,-2px);opacity:1;} 60%{transform:translate(-2px,-1px);opacity:.7;}
+    80%{transform:translate(2px,1px);opacity:1;} 100%{transform:translate(0);opacity:1;} }
+
+  #ending-overlay{ position:fixed; inset:0; z-index:25; display:none; align-items:center; justify-content:center; padding:20px; }
+
+  #mobile-controls{ position:fixed; inset:0; z-index:12; display:none; pointer-events:none; }
+  #dpad{ position:absolute; left:18px; bottom:22px; width:150px; height:150px;
+    display:grid; grid-template-columns:1fr 1fr 1fr; grid-template-rows:1fr 1fr 1fr; gap:4px; pointer-events:all; }
+  #dpad button{ margin:0; width:100%; height:100%; font-size:16px; padding:0;
+    background:rgba(2,10,5,0.55); display:flex; align-items:center; justify-content:center; }
+  #dpad .up{ grid-column:2; grid-row:1; } #dpad .left{ grid-column:1; grid-row:2; }
+  #dpad .right{ grid-column:3; grid-row:2; } #dpad .down{ grid-column:2; grid-row:3; }
+  #interact-btn{ position:absolute; right:22px; bottom:34px; width:74px; height:74px; border-radius:50%;
+    pointer-events:all; font-size:12px; display:flex; align-items:center; justify-content:center;
+    opacity:0; transition:opacity .15s; }
+  #interact-btn.show{ opacity:1; }
+</style>
+</head>
+<body>
+
+<canvas id="three-canvas"></canvas>
+<div id="scanlines"></div>
+<div id="vignette"></div>
+
+<button id="vr-button" style="position:fixed; top:14px; right:14px; z-index:40; display:none;
+  font-family:inherit; background:rgba(2,10,5,0.75); color:var(--green); border:1px solid var(--green-dim);
+  padding:10px 14px; border-radius:3px; font-size:13px; cursor:pointer;">🥽 gioca in VR</button>
+
+<div id="hud">
+  <div id="instructions">WASD / frecce — muoviti · trascina — guarda · E — interagisci</div>
+  <div id="keycount">CHIAVI: 0/3</div>
+  <div id="crosshair"></div>
+  <div id="prompt"></div>
+</div>
+<div id="toast"></div>
+
+<div class="overlay-screen" id="screen-boot">
+  <div class="term">
+    <div class="bar"><span>SISTEMA</span><span id="clock">--:--:--</span></div>
+    <h1>ascensore_di_servizio <span class="cursor"></span></h1>
+    <p class="dim">Le porte si aprono su un piccolo ascensore. Un pannello con quattro pulsanti
+    ti fissa, illuminato debolmente.</p>
+    <p>Tre pulsanti ti portano in tre luoghi diversi. In ognuno è nascosta una chiave.
+    Il quarto pulsante, <span class="amber">USCITA</span>, si sblocca solo quando le avrai
+    trovate tutte.</p>
+    <p class="dim">Muoviti con WASD, guardati intorno trascinando lo schermo, avvicinati a un
+    pulsante o a un oggetto e premi <span class="amber">E</span> per interagire.</p>
+    <button id="enter-btn">entra nell'ascensore →</button>
+  </div>
+</div>
+
+<div id="disconnect"><div class="disconnect-text" id="disconnect-text">USCITA DALLA SIMULAZIONE</div></div>
+
+<div id="ending-overlay">
+  <div class="term">
+    <div class="bar"><span>SISTEMA</span><span>FINE SESSIONE</span></div>
+    <h1>sei fuori</h1>
+    <p>Le tre chiavi si allineano per un istante, poi si dissolvono. Il pannello smette di
+    lampeggiare. Da qualche parte, un processo che non controllavi si chiude.</p>
+    <p class="amber">FINE.</p>
+    <button onclick="location.reload()">ricomincia</button>
+  </div>
+</div>
+
+<div id="mobile-controls">
+  <div id="dpad">
+    <button class="up" data-k="KeyW">▲</button>
+    <button class="left" data-k="KeyA">◀</button>
+    <button class="right" data-k="KeyD">▶</button>
+    <button class="down" data-k="KeyS">▼</button>
+  </div>
+  <button id="interact-btn">E</button>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script>
+/* ================= CLOCK ================= */
+function tickClock(){ const c=document.getElementById('clock'); if(c) c.textContent = new Date().toTimeString().slice(0,8); }
+setInterval(tickClock,1000); tickClock();
+
+/* ================= THREE SETUP ================= */
+const canvas = document.getElementById('three-canvas');
+const renderer = new THREE.WebGLRenderer({ canvas, antialias:true });
+renderer.setPixelRatio(Math.min(window.devicePixelRatio,2));
+renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.xr.enabled = true;
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+
+const scene = new THREE.Scene();
+scene.fog = new THREE.Fog(0x05100c, 6, 40);
+
+const camera = new THREE.PerspectiveCamera(70, window.innerWidth/window.innerHeight, 0.1, 300);
+camera.rotation.order = 'YXZ';
+
+const rig = new THREE.Group();
+rig.add(camera);
+camera.position.set(0,1.6,0);
+scene.add(rig);
+
+window.addEventListener('resize', ()=>{
+  camera.aspect = window.innerWidth/window.innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(window.innerWidth, window.innerHeight);
+});
+
+/* lights */
+scene.add(new THREE.HemisphereLight(0x1c3a2c, 0x050806, 1.1));
+const moon = new THREE.DirectionalLight(0x9fe0c0, 0.8);
+moon.position.set(15,22,10);
+moon.castShadow = true;
+moon.shadow.mapSize.set(1024,1024);
+moon.shadow.camera.left=-20; moon.shadow.camera.right=20;
+moon.shadow.camera.top=20; moon.shadow.camera.bottom=-20;
+moon.shadow.camera.far=60;
+scene.add(moon);
+const greenPulse = new THREE.PointLight(0x39ff8a, 1.0, 20);
+greenPulse.position.set(0,3,0);
+scene.add(greenPulse);
+
+/* ================= COLLISION ================= */
+const colliders = [];
+function addCollider(x,z,w,d,margin=0.4){
+  colliders.push({ minX:x-w/2-margin, maxX:x+w/2+margin, minZ:z-d/2-margin, maxZ:z+d/2+margin });
+}
+function collides(x,z){
+  for(const c of colliders) if(x>c.minX && x<c.maxX && z>c.minZ && z<c.maxZ) return true;
+  return false;
+}
+
+/* ================= TEXTURE HELPERS ================= */
+function makeFloorTexture(base, speck){
+  const cv=document.createElement('canvas'); cv.width=256; cv.height=256;
+  const cx=cv.getContext('2d');
+  cx.fillStyle='#'+base.toString(16).padStart(6,'0'); cx.fillRect(0,0,256,256);
+  for(let i=0;i<900;i++){
+    cx.fillStyle='rgba('+speck+','+(Math.random()*0.12)+')';
+    cx.fillRect(Math.random()*256,Math.random()*256,2,2);
+  }
+  const tex = new THREE.CanvasTexture(cv);
+  tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+  return tex;
+}
+function makeLabel(text,color){
+  const cv=document.createElement('canvas'); cv.width=256; cv.height=96;
+  const cx=cv.getContext('2d');
+  cx.fillStyle='#050e08'; cx.fillRect(0,0,256,96);
+  cx.font='bold 40px monospace'; cx.fillStyle=color; cx.textAlign='center'; cx.textBaseline='middle';
+  cx.fillText(text,128,50);
+  return new THREE.CanvasTexture(cv);
+}
+
+/* ================= INTERACTABLES ================= */
+const interactables = []; // {mesh, type:'button'|'key'|'portal', key, label}
+function registerInteractable(mesh,type,key,label){ interactables.push({mesh,type,key,label}); }
+
+/* ================= ZONE: ELEVATOR (origin) ================= */
+const elevGroup = new THREE.Group();
+scene.add(elevGroup);
+
+const elevFloorTex = makeFloorTexture(0x0d1512, '40,80,60');
+elevFloorTex.repeat.set(3,3);
+const elevFloor = new THREE.Mesh(new THREE.PlaneGeometry(5,5), new THREE.MeshStandardMaterial({ map:elevFloorTex, roughness:0.7, metalness:0.3 }));
+elevFloor.rotation.x=-Math.PI/2; elevFloor.receiveShadow=true;
+elevGroup.add(elevFloor);
+const elevCeil = elevFloor.clone(); elevCeil.position.y=3; elevCeil.rotation.x=Math.PI/2;
+elevGroup.add(elevCeil);
+
+const wallMat = new THREE.MeshStandardMaterial({ color:0x141d19, roughness:0.6, metalness:0.4 });
+function elevWall(x,z,w,d,ry){
+  const w1 = new THREE.Mesh(new THREE.BoxGeometry(w,3,d), wallMat);
+  w1.position.set(x,1.5,z); if(ry) w1.rotation.y = ry;
+  w1.castShadow=true; w1.receiveShadow=true;
+  elevGroup.add(w1);
+}
+elevWall(0,-2.5,5,0.15); // back
+elevWall(-2.5,0,0.15,5); // left
+elevWall(2.5,0,0.15,5);  // right
+addCollider(0,-2.5,5,0.15); addCollider(-2.5,0,0.15,5); addCollider(2.5,0,0.15,5);
+
+const ceilLight = new THREE.PointLight(0xdfffe8, 1.1, 8);
+ceilLight.position.set(0,2.8,0);
+elevGroup.add(ceilLight);
+
+/* control panel with 4 buttons */
+const panelBack = new THREE.Mesh(new THREE.BoxGeometry(2.2,2.0,0.1), new THREE.MeshStandardMaterial({ color:0x0c1210, roughness:0.5 }));
+panelBack.position.set(0,1.5,-2.4);
+elevGroup.add(panelBack);
+
+const FLOORS = [
+  { key:'floor1', label:'1 · FORESTA', y:2.05, color:0x4aff9a },
+  { key:'floor2', label:'2 · DESERTO', y:1.55, color:0xffb84a },
+  { key:'floor3', label:'3 · VUOTO',   y:1.05, color:0x8a6bff },
+  { key:'exit',   label:'USCITA',      y:0.55, color:0x555555 },
+];
+const buttonMeshes = {};
+FLOORS.forEach(f=>{
+  const btn = new THREE.Mesh(new THREE.CylinderGeometry(0.14,0.14,0.08,16),
+    new THREE.MeshStandardMaterial({ color:f.color, emissive:f.color, emissiveIntensity:0.5 }));
+  btn.rotation.x = Math.PI/2;
+  btn.position.set(-0.75, f.y, -2.34);
+  elevGroup.add(btn);
+  buttonMeshes[f.key] = btn;
+  registerInteractable(btn,'button',f.key,f.label);
+
+  const label = new THREE.Mesh(new THREE.PlaneGeometry(1.1,0.35), new THREE.MeshBasicMaterial({ map:makeLabel(f.label,'#'+f.color.toString(16).padStart(6,'0')), transparent:true }));
+  label.position.set(0.15, f.y, -2.34);
+  elevGroup.add(label);
+});
+buttonMeshes.exit.material.emissiveIntensity = 0.15; // starts locked/dim
+
+/* ================= WORLD DEFINITIONS ================= */
+const WORLDS = {
+  floor1: { cx:300, cz:0, radius:13, fog:0x0c2a18, spawn:{x:300,z:9}, spawnYaw:0 },
+  floor2: { cx:600, cz:0, radius:13, fog:0x3a2410, spawn:{x:600,z:9}, spawnYaw:0 },
+  floor3: { cx:900, cz:0, radius:13, fog:0x0a0714, spawn:{x:900,z:9}, spawnYaw:0 },
+};
+const keyMeshes = {}; // key -> mesh
+const collectedKeys = new Set();
+
+function makeKey(worldKey, x, z){
+  const g = new THREE.Group();
+  const gem = new THREE.Mesh(new THREE.OctahedronGeometry(0.28,0),
+    new THREE.MeshStandardMaterial({ color:0xffe27a, emissive:0xffcf4a, emissiveIntensity:1.1, roughness:0.3 }));
+  gem.castShadow = true;
+  g.add(gem);
+  g.position.set(x, 1.1, z);
+  g.userData.baseY = 1.1;
+  scene.add(g);
+  keyMeshes[worldKey] = g;
+  registerInteractable(g,'key',worldKey,'raccogli la chiave');
+}
+function makePortal(x,z){
+  const ring = new THREE.Mesh(new THREE.TorusGeometry(0.8,0.06,10,32),
+    new THREE.MeshStandardMaterial({ color:0x39ff8a, emissive:0x39ff8a, emissiveIntensity:0.9 }));
+  ring.rotation.x = Math.PI/2;
+  ring.position.set(x,0.05,z);
+  scene.add(ring);
+  registerInteractable(ring,'portal','elevator','torna all\'ascensore');
+  return ring;
+}
+
+/* ---- WORLD 1: FORESTA ---- */
+{
+  const c = WORLDS.floor1;
+  const floorTex = makeFloorTexture(0x152a1a, '80,160,110'); floorTex.repeat.set(10,10);
+  const gr = new THREE.Mesh(new THREE.CircleGeometry(c.radius,32), new THREE.MeshStandardMaterial({ map:floorTex, roughness:1 }));
+  gr.rotation.x=-Math.PI/2; gr.position.set(c.cx,0,c.cz); gr.receiveShadow=true;
+  scene.add(gr);
+  function tree(x,z){
+    const g = new THREE.Group();
+    const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.13,0.18,1.6,7), new THREE.MeshStandardMaterial({ color:0x241a12 }));
+    trunk.position.y=0.8; trunk.castShadow=true;
+    const leaves = new THREE.Mesh(new THREE.ConeGeometry(1.0,2.0,8), new THREE.MeshStandardMaterial({ color:0x123322 }));
+    leaves.position.y=2.2; leaves.castShadow=true;
+    g.add(trunk,leaves); g.position.set(x,0,z);
+    scene.add(g);
+  }
+  const pts = [[-6,-4],[6,-3],[-4,4],[4,6],[-8,2],[8,3],[0,-8],[-3,8],[3,-7]];
+  pts.forEach(([dx,dz])=> tree(c.cx+dx, c.cz+dz));
+  makeKey('floor1', c.cx-3, c.cz-2);
+  makePortal(c.spawn.x, c.spawn.z);
+}
+
+/* ---- WORLD 2: DESERTO ---- */
+{
+  const c = WORLDS.floor2;
+  const floorTex = makeFloorTexture(0x4a3620, '200,170,110'); floorTex.repeat.set(10,10);
+  const gr = new THREE.Mesh(new THREE.CircleGeometry(c.radius,32), new THREE.MeshStandardMaterial({ map:floorTex, roughness:1 }));
+  gr.rotation.x=-Math.PI/2; gr.position.set(c.cx,0,c.cz); gr.receiveShadow=true;
+  scene.add(gr);
+  function rock(x,z,s){
+    const rk = new THREE.Mesh(new THREE.IcosahedronGeometry(s,0), new THREE.MeshStandardMaterial({ color:0x5c4630, roughness:1 }));
+    rk.position.set(x,s*0.6,z); rk.rotation.set(Math.random(),Math.random(),Math.random());
+    rk.castShadow=true; rk.receiveShadow=true;
+    scene.add(rk);
+  }
+  [[-5,-3,0.9],[5,-4,1.3],[-3,5,0.7],[6,4,1.0],[-8,0,1.1],[0,7,0.8],[8,-2,0.6]].forEach(([dx,dz,s])=> rock(c.cx+dx,c.cz+dz,s));
+  const sun = new THREE.PointLight(0xffb060, 0.8, 24);
+  sun.position.set(c.cx, 8, c.cz);
+  scene.add(sun);
+  makeKey('floor2', c.cx+4, c.cz-3);
+  makePortal(c.spawn.x, c.spawn.z);
+}
+
+/* ---- WORLD 3: VUOTO DIGITALE ---- */
+{
+  const c = WORLDS.floor3;
+  const gr = new THREE.Mesh(new THREE.CircleGeometry(c.radius,32),
+    new THREE.MeshStandardMaterial({ color:0x050308, roughness:1 }));
+  gr.rotation.x=-Math.PI/2; gr.position.set(c.cx,0,c.cz); gr.receiveShadow=true;
+  scene.add(gr);
+  const grid = new THREE.GridHelper(c.radius*2, 24, 0x39ff8a, 0x1c3a2c);
+  grid.position.set(c.cx,0.02,c.cz);
+  scene.add(grid);
+  function shard(x,z,y){
+    const m = new THREE.Mesh(new THREE.BoxGeometry(0.6,0.6,0.6),
+      new THREE.MeshBasicMaterial({ color:0x39ff8a, wireframe:true }));
+    m.position.set(x,y,z);
+    scene.add(m);
+    return m;
+  }
+  const shards = [];
+  [[-4,-3,1.5],[4,-2,2.4],[-3,4,1.8],[5,3,1.2],[-7,1,2.8],[2,-6,1.6]].forEach(([dx,dz,y])=> shards.push(shard(c.cx+dx,c.cz+dz,y)));
+  window.__voidShards = shards;
+  makeKey('floor3', c.cx-2, c.cz+4);
+  makePortal(c.spawn.x, c.spawn.z);
+}
+
+/* outer bounds so you can't wander into open space between worlds */
+[300,600,900].forEach(cx=>{ addCollider(cx-13,0,0.2,30,0); addCollider(cx+13,0,0.2,30,0); addCollider(cx,-13,26,0.2,0); addCollider(cx,13,26,0.2,0); });
+
+/* ================= STATE ================= */
+let state = 'boot'; // boot | elevator | world | ending
+let currentWorld = null;
+let yaw = 0, pitch = -0.02;
+rig.position.set(0,0,1.6);
+
+const keys = {};
+window.addEventListener('keydown', e=>{ keys[e.code]=true; if(e.code==='KeyE') tryInteract(); });
+window.addEventListener('keyup', e=>{ keys[e.code]=false; });
+
+let dragging=false,lastX=0,lastY=0;
+canvas.addEventListener('mousedown', e=>{ dragging=true; lastX=e.clientX; lastY=e.clientY; });
+window.addEventListener('mouseup', ()=> dragging=false);
+window.addEventListener('mousemove', e=>{
+  if(!dragging) return;
+  const dx=e.clientX-lastX, dy=e.clientY-lastY; lastX=e.clientX; lastY=e.clientY;
+  yaw -= dx*0.0028; pitch -= dy*0.0028; pitch=Math.max(-1.2,Math.min(1.2,pitch));
+});
+canvas.addEventListener('touchstart', e=>{ if(e.touches.length){ dragging=true; lastX=e.touches[0].clientX; lastY=e.touches[0].clientY; } });
+canvas.addEventListener('touchmove', e=>{
+  if(!dragging||!e.touches.length) return;
+  const t=e.touches[0]; const dx=t.clientX-lastX, dy=t.clientY-lastY; lastX=t.clientX; lastY=t.clientY;
+  yaw -= dx*0.0032; pitch -= dy*0.0032; pitch=Math.max(-1.2,Math.min(1.2,pitch));
+},{passive:true});
+canvas.addEventListener('touchend', ()=> dragging=false);
+
+const isTouch = 'ontouchstart' in window || navigator.maxTouchPoints>0;
+if(isTouch){
+  document.getElementById('mobile-controls').style.display='block';
+  document.querySelectorAll('#dpad button').forEach(btn=>{
+    const k = btn.dataset.k;
+    btn.addEventListener('touchstart', ev=>{ ev.preventDefault(); keys[k]=true; }, {passive:false});
+    btn.addEventListener('touchend', ev=>{ ev.preventDefault(); keys[k]=false; }, {passive:false});
+  });
+  document.getElementById('interact-btn').addEventListener('touchstart', ev=>{ ev.preventDefault(); tryInteract(); }, {passive:false});
+}
+
+/* ================= VR CONTROLLERS ================= */
+function makeControllerTip(){
+  return new THREE.Mesh(new THREE.ConeGeometry(0.02,0.08,8),
+    new THREE.MeshStandardMaterial({ color:0x39ff8a, emissive:0x39ff8a, emissiveIntensity:0.7 }));
+}
+const controller0 = renderer.xr.getController(0);
+const controller1 = renderer.xr.getController(1);
+controller0.add(makeControllerTip());
+controller1.add(makeControllerTip());
+
+let vrTriggerPressTime = 0;
+function onVRSelectStart(){ vrTriggerPressTime = performance.now(); }
+function onVRSelectEnd(){ if(performance.now()-vrTriggerPressTime < 500) tryInteract(); }
+controller0.addEventListener('selectstart', onVRSelectStart);
+controller0.addEventListener('selectend', onVRSelectEnd);
+controller1.addEventListener('selectstart', onVRSelectStart);
+controller1.addEventListener('selectend', onVRSelectEnd);
+rig.add(controller0, controller1);
+
+function getThumbstick(){
+  const session = renderer.xr.getSession && renderer.xr.getSession();
+  if(!session) return {x:0,y:0};
+  let bestX=0,bestY=0,bestMag=0.15;
+  for(const source of session.inputSources){
+    if(source.gamepad && source.gamepad.axes && source.gamepad.axes.length>=2){
+      const ax = source.gamepad.axes;
+      const candidates = ax.length>=4 ? [[ax[2],ax[3]],[ax[0],ax[1]]] : [[ax[0],ax[1]]];
+      for(const [x,y] of candidates){
+        const mag = Math.sqrt(x*x+y*y);
+        if(mag>bestMag){ bestMag=mag; bestX=x; bestY=y; }
+      }
+    }
+  }
+  return {x:bestX,y:bestY};
+}
+
+/* ================= INTERACTION ================= */
+let nearest = null;
+const promptEl = document.getElementById('prompt');
+const worldPos = new THREE.Vector3();
+
+function updateNearest(){
+  camera.getWorldPosition(worldPos);
+  if(state==='elevator' || state==='world'){
+    let best=null, bestD=2.2;
+    interactables.forEach(it=>{
+      if(it.type==='key' && !it.mesh.visible) return;
+      const dx = worldPos.x - it.mesh.position.x;
+      const dz = worldPos.z - it.mesh.position.z;
+      const d = Math.sqrt(dx*dx+dz*dz);
+      if(d<bestD){ bestD=d; best=it; }
+    });
+    nearest = best;
+  } else nearest = null;
+
+  if(nearest){
+    promptEl.textContent = '[E] ' + nearest.label;
+    promptEl.classList.add('show');
+    document.getElementById('interact-btn').classList.add('show');
+  } else {
+    promptEl.classList.remove('show');
+    document.getElementById('interact-btn').classList.remove('show');
+  }
+}
+
+function tryInteract(){
+  if(!nearest) return;
+  if(nearest.type==='button') pressButton(nearest.key);
+  else if(nearest.type==='key') collectKey(nearest.key, nearest.mesh);
+  else if(nearest.type==='portal') returnToElevator();
+}
+
+function showToast(msg,ms){
+  const t = document.getElementById('toast');
+  t.textContent = msg; t.classList.add('show');
+  clearTimeout(t._timer);
+  t._timer = setTimeout(()=> t.classList.remove('show'), ms||2200);
+}
+
+function updateHUD(){
+  document.getElementById('keycount').textContent = 'CHIAVI: '+collectedKeys.size+'/3';
+  const unlocked = collectedKeys.size>=3;
+  buttonMeshes.exit.material.emissiveIntensity = unlocked ? 1.1 : 0.15;
+  buttonMeshes.exit.material.color.set(unlocked ? 0x39ff8a : 0x555555);
+  buttonMeshes.exit.material.emissive.set(unlocked ? 0x39ff8a : 0x333333);
+}
+
+function pressButton(key){
+  if(key==='exit'){
+    if(collectedKeys.size<3){ showToast('Ti servono ancora '+(3-collectedKeys.size)+' chiavi.'); return; }
+    startEnding(); return;
+  }
+  const w = WORLDS[key];
+  fadeToBlack(()=>{
+    state='world'; currentWorld=key;
+    rig.position.set(w.spawn.x,0,w.spawn.z);
+    yaw = w.spawnYaw; pitch=0;
+    scene.fog.color.set(w.fog);
+  });
+}
+function returnToElevator(){
+  fadeToBlack(()=>{
+    state='elevator'; currentWorld=null;
+    rig.position.set(0,0,1.6); yaw=0; pitch=-0.02;
+    scene.fog.color.set(0x05100c);
+  });
+}
+function collectKey(key,mesh){
+  if(collectedKeys.has(key)) return;
+  collectedKeys.add(key);
+  mesh.visible = false;
+  updateHUD();
+  showToast('Chiave trovata! ('+collectedKeys.size+'/3)', 1300);
+  setTimeout(returnToElevator, 1300);
+}
+
+/* ================= MOVEMENT ================= */
+const forwardVec = new THREE.Vector3();
+const rightVec = new THREE.Vector3();
+function updateMovement(dt){
+  const speed = 4.0*dt;
+  const inVR = renderer.xr.isPresenting;
+  if(inVR){
+    camera.getWorldDirection(forwardVec); forwardVec.y=0; forwardVec.normalize();
+    rightVec.set(forwardVec.z,0,-forwardVec.x);
+  } else {
+    forwardVec.set(0,0,-1).applyEuler(new THREE.Euler(0,yaw,0));
+    rightVec.set(1,0,0).applyEuler(new THREE.Euler(0,yaw,0));
+  }
+  let mx=0,mz=0;
+  if(keys['KeyW']||keys['ArrowUp']){ mx+=forwardVec.x*speed; mz+=forwardVec.z*speed; }
+  if(keys['KeyS']||keys['ArrowDown']){ mx-=forwardVec.x*speed; mz-=forwardVec.z*speed; }
+  if(keys['KeyA']||keys['ArrowLeft']){ mx-=rightVec.x*speed; mz-=rightVec.z*speed; }
+  if(keys['KeyD']||keys['ArrowRight']){ mx+=rightVec.x*speed; mz+=rightVec.z*speed; }
+  if(inVR){
+    const st = getThumbstick();
+    mx += forwardVec.x*(-st.y)*speed + rightVec.x*st.x*speed;
+    mz += forwardVec.z*(-st.y)*speed + rightVec.z*st.x*speed;
+  }
+  const curX=rig.position.x, curZ=rig.position.z;
+  if(!collides(curX+mx,curZ)) rig.position.x += mx;
+  if(!collides(rig.position.x,curZ+mz)) rig.position.z += mz;
+
+  if(state==='world' && currentWorld){
+    const w = WORLDS[currentWorld];
+    const dx = rig.position.x-w.cx, dz = rig.position.z-w.cz;
+    const d = Math.sqrt(dx*dx+dz*dz);
+    if(d>w.radius-0.5){ const k=(w.radius-0.5)/d; rig.position.x=w.cx+dx*k; rig.position.z=w.cz+dz*k; }
+  }
+}
+
+/* ================= ENDING ================= */
+function startEnding(){
+  state='ending';
+  document.getElementById('hud').style.display='none';
+  const d = document.getElementById('disconnect');
+  d.classList.add('show');
+  setTimeout(()=>{
+    d.classList.remove('show');
+    document.getElementById('ending-overlay').style.display='flex';
+  }, 2600);
+}
+
+/* ================= FADE HELPER ================= */
+const fadeDiv = document.createElement('div');
+Object.assign(fadeDiv.style,{ position:'fixed', inset:'0', background:'#000', zIndex:60, opacity:'0',
+  transition:'opacity .4s ease', pointerEvents:'none' });
+document.body.appendChild(fadeDiv);
+function fadeToBlack(mid){
+  fadeDiv.style.pointerEvents='all'; fadeDiv.style.opacity='1';
+  setTimeout(()=>{ mid();
+    setTimeout(()=>{ fadeDiv.style.opacity='0';
+      setTimeout(()=> fadeDiv.style.pointerEvents='none', 400);
+    }, 250);
+  }, 420);
+}
+
+/* ================= BOOT ================= */
+document.getElementById('enter-btn').addEventListener('click', ()=>{
+  document.getElementById('screen-boot').style.display='none';
+  document.getElementById('hud').style.display='block';
+  state='elevator';
+});
+
+/* ================= WEBXR / VR BUTTON ================= */
+const vrButton = document.getElementById('vr-button');
+const instructionsEl = document.getElementById('instructions');
+let xrSession = null;
+if(navigator.xr){
+  navigator.xr.isSessionSupported('immersive-vr').then(s=>{ vrButton.style.display = s?'inline-block':'none'; }).catch(()=>{ vrButton.style.display='none'; });
+}
+vrButton.addEventListener('click', ()=>{
+  if(xrSession){ xrSession.end(); return; }
+  navigator.xr.requestSession('immersive-vr', {
+    optionalFeatures:['local-floor','bounded-floor','dom-overlay'],
+    domOverlay:{ root: document.body }
+  }).then(onXRSessionStarted).catch(err=> alert('Non è stato possibile avviare la VR: '+err.message));
+});
+function onXRSessionStarted(session){
+  xrSession = session;
+  session.addEventListener('end', onXRSessionEnd);
+  renderer.xr.setReferenceSpaceType('local-floor');
+  renderer.xr.setSession(session);
+  vrButton.textContent='❌ esci dalla VR';
+  instructionsEl.textContent='stick del controller — muoviti · grilletto — interagisci';
+}
+function onXRSessionEnd(){
+  xrSession=null;
+  vrButton.textContent='🥽 gioca in VR';
+  instructionsEl.textContent='WASD / frecce — muoviti · trascina — guarda · E — interagisci';
+}
+
+/* ================= RENDER LOOP ================= */
+let last = performance.now();
+function animate(now){
+  const dt = Math.min(0.05,(now-last)/1000); last=now;
+  greenPulse.intensity = 1.0 + Math.sin(now*0.003)*0.4;
+
+  Object.values(keyMeshes).forEach(g=>{
+    if(g.visible){ g.rotation.y += dt*1.2; g.position.y = g.userData.baseY + Math.sin(now*0.002)*0.12; }
+  });
+  if(window.__voidShards) window.__voidShards.forEach((m,i)=>{ m.rotation.x+=dt*0.6; m.rotation.y+=dt*0.4; });
+
+  if(state==='elevator' || state==='world'){
+    updateMovement(dt);
+    updateNearest();
+  }
+
+  if(!renderer.xr.isPresenting){
+    rig.rotation.y = yaw;
+    camera.rotation.set(pitch,0,0);
+  }
+
+  renderer.render(scene, camera);
+}
+renderer.setAnimationLoop(animate);
+</script>
+</body>
+</html>
