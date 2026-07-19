@@ -1,0 +1,826 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>La Città Strana — VR</title>
+<style>
+  :root{
+    --sky:#6fa8c9;
+    --green:#00ff41;
+    --foam:#eef6f2;
+  }
+  *{ box-sizing:border-box; }
+  html,body{
+    margin:0; padding:0; height:100%; overflow:hidden;
+    background:#0b1a22;
+    font-family:'Segoe UI', system-ui, sans-serif;
+    color:var(--foam);
+  }
+  canvas{ display:block; }
+  #ui{
+    position:fixed; inset:0; pointer-events:none;
+    display:flex; flex-direction:column; align-items:center;
+    padding:30px 16px; z-index:5;
+  }
+  #ui.hidden{ display:none; }
+  #titleCard{ text-align:center; text-shadow:0 2px 14px rgba(0,0,0,0.6); max-width:520px; }
+  #titleCard h1{ margin:0; font-size:clamp(1.6rem,5vw,2.4rem); font-weight:300; letter-spacing:1px; }
+  #titleCard h1 b{ color:#7fe9de; font-weight:600; }
+  #titleCard p{ margin:10px 0 0; font-size:0.85rem; opacity:0.85; line-height:1.6; }
+  .note{
+    margin-top:16px; font-size:0.75rem; opacity:0.75;
+    background:rgba(0,0,0,0.35); border:1px solid rgba(255,255,255,0.2);
+    padding:10px 16px; border-radius:8px; max-width:440px; text-align:left; line-height:1.5;
+  }
+  #VRButton{
+    position:fixed !important; bottom:26px !important; left:50% !important;
+    transform:translateX(-50%);
+    background:rgba(10,20,20,0.7) !important;
+    border:1px solid #7fe9de !important;
+    color:#eef6f2 !important;
+    border-radius:8px !important;
+  }
+</style>
+</head>
+<body>
+
+<div id="ui">
+  <div id="titleCard">
+    <h1>La Città <b>Strana</b></h1>
+    <p>Una città qualunque. Cammina, parla con la gente, vai a dormire quando vuoi. Ma presta attenzione a ciò che cambia, giorno dopo giorno.</p>
+    <p>Muoviti con lo <b>stick sinistro</b>, girati con il <b>destro</b>, premi il <b>grilletto</b> per interagire (parlare, dormire, aprire il vicolo).</p>
+    <div class="note">
+      Si gioca con i controller del visore — vedrai le tue mani al posto dei controller.
+    </div>
+  </div>
+</div>
+
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+  }
+}
+</script>
+
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { VRButton } from 'three/addons/webxr/VRButton.js';
+import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+
+/* ============================================================
+   LA CITTÀ STRANA — VR con controller
+   Cammina con lo stick, il grilletto interagisce/parla/apre il vicolo.
+   Le tue mani (stilizzate) sostituiscono i controller a schermo.
+   ============================================================ */
+
+// Il bloom ora si applica solo all'anteprima da computer (non dentro il visore,
+// dove il post-processing può causare schermo nero). Per disattivarlo anche lì:
+const ENABLE_BLOOM = true;
+
+// ---------- Renderer / Scene / Camera / Rig ----------
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.xr.enabled = true;
+renderer.outputColorSpace = THREE.SRGBColorSpace;
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+document.body.appendChild(renderer.domElement);
+document.body.appendChild(VRButton.createButton(renderer, {
+  optionalFeatures: ['local-floor']
+}));
+
+const scene = new THREE.Scene();
+const FOG_NORMAL = new THREE.Color(0x9fc3d6);
+const FOG_STRANGE = new THREE.Color(0x4a6a52);
+scene.fog = new THREE.FogExp2(FOG_NORMAL.getHex(), 0.02);
+
+const camera = new THREE.PerspectiveCamera(65, window.innerWidth / window.innerHeight, 0.05, 120);
+camera.position.set(0, 1.6, -2);
+
+const cameraRig = new THREE.Group();
+cameraRig.add(camera);
+scene.add(cameraRig);
+
+window.addEventListener('resize', () => {
+  renderer.setSize(window.innerWidth, window.innerHeight);
+  camera.aspect = window.innerWidth / window.innerHeight;
+  camera.updateProjectionMatrix();
+});
+
+const previewControls = new OrbitControls(camera, renderer.domElement);
+previewControls.target.set(0, 1.6, 0);
+previewControls.enableDamping = true;
+previewControls.enablePan = false;
+previewControls.enableZoom = false;
+previewControls.minDistance = 1;
+previewControls.maxDistance = 1;
+previewControls.update();
+
+// ---------- Composer (bloom sulle luci al neon/portale/lampioni) ----------
+const composer = new EffectComposer(renderer);
+composer.addPass(new RenderPass(scene, camera));
+const bloomPass = new UnrealBloomPass(new THREE.Vector2(window.innerWidth, window.innerHeight), 0.55, 0.4, 0.86);
+if (ENABLE_BLOOM) composer.addPass(bloomPass);
+window.addEventListener('resize', () => composer.setSize(window.innerWidth, window.innerHeight));
+
+// ---------- Cielo (sfumato, cambia con la stranezza) ----------
+const skyUniforms = {
+  topColor: { value: new THREE.Color(0x2b6fa8) },
+  bottomColor: { value: new THREE.Color(0xcfe8f2) },
+  offset: { value: 12 },
+  exponent: { value: 0.7 }
+};
+const skyMat = new THREE.ShaderMaterial({
+  uniforms: skyUniforms,
+  vertexShader: `
+    varying vec3 vWorldPosition;
+    void main(){
+      vec4 wp = modelMatrix * vec4(position,1.0);
+      vWorldPosition = wp.xyz;
+      gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.0);
+    }`,
+  fragmentShader: `
+    uniform vec3 topColor; uniform vec3 bottomColor; uniform float offset; uniform float exponent;
+    varying vec3 vWorldPosition;
+    void main(){
+      float h = normalize(vWorldPosition + vec3(0.0, offset, 0.0)).y;
+      gl_FragColor = vec4(mix(bottomColor, topColor, max(pow(max(h,0.0), exponent), 0.0)), 1.0);
+    }`,
+  side: THREE.BackSide
+});
+const sky = new THREE.Mesh(new THREE.SphereGeometry(100, 24, 14), skyMat);
+scene.add(sky);
+
+// ---------- Luci ----------
+const hemi = new THREE.HemisphereLight(0xffffff, 0x556a52, 0.95);
+scene.add(hemi);
+const sun = new THREE.DirectionalLight(0xfff2d8, 1.25);
+sun.position.set(10, 16, 6);
+scene.add(sun);
+const fillSky = new THREE.HemisphereLight(0x7fb8e0, 0x2a2a2a, 0.25);
+scene.add(fillSky);
+
+function makeGlowSpriteTexture(color) {
+  const c = document.createElement('canvas'); c.width = c.height = 128;
+  const ctx = c.getContext('2d');
+  const grad = ctx.createRadialGradient(64,64,0,64,64,64);
+  grad.addColorStop(0, color); grad.addColorStop(1, 'rgba(0,0,0,0)');
+  ctx.fillStyle = grad; ctx.fillRect(0,0,128,128);
+  return new THREE.CanvasTexture(c);
+}
+const sunSprite = new THREE.Sprite(new THREE.SpriteMaterial({
+  map: makeGlowSpriteTexture('rgba(255,244,214,1)'), transparent: true, depthWrite: false
+}));
+sunSprite.scale.set(14, 14, 1);
+sunSprite.position.set(sun.position.x * 4, sun.position.y * 4, sun.position.z * 4);
+scene.add(sunSprite);
+
+// ============================================================
+// GRUPPI PRINCIPALI: città vs vuoto (fuori da Matrix)
+// ============================================================
+const cityGroup = new THREE.Group();
+const voidGroup = new THREE.Group();
+voidGroup.visible = false;
+scene.add(cityGroup, voidGroup);
+
+// ---------- Texture helper ----------
+function makeAsphaltTexture() {
+  const c = document.createElement('canvas'); c.width = c.height = 512;
+  const ctx = c.getContext('2d');
+  ctx.fillStyle = '#2b2f31'; ctx.fillRect(0,0,512,512);
+  for (let i=0;i<1400;i++){
+    ctx.fillStyle = `rgba(${20+Math.random()*30},${20+Math.random()*30},${22+Math.random()*30},0.4)`;
+    ctx.fillRect(Math.random()*512, Math.random()*512, 1.5, 1.5);
+  }
+  ctx.strokeStyle = 'rgba(230,200,90,0.8)';
+  ctx.lineWidth = 4;
+  ctx.setLineDash([26,18]);
+  ctx.beginPath(); ctx.moveTo(256,0); ctx.lineTo(256,512); ctx.stroke();
+  const tex = new THREE.CanvasTexture(c);
+  tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+  tex.repeat.set(10,10);
+  return tex;
+}
+function makeWindowTexture(seed) {
+  const c = document.createElement('canvas'); c.width = c.height = 256;
+  const ctx = c.getContext('2d');
+  ctx.fillStyle = '#333b3f'; ctx.fillRect(0,0,256,256);
+  const rows=8, cols=6;
+  for (let r=0;r<rows;r++){
+    for (let col=0; col<cols; col++){
+      const lit = Math.random() < (0.3 + seed*0.05);
+      ctx.fillStyle = lit ? 'rgba(255,225,150,0.9)' : 'rgba(15,20,22,0.9)';
+      ctx.fillRect(10 + col*40, 10 + r*30, 26, 20);
+    }
+  }
+  const tex = new THREE.CanvasTexture(c);
+  tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+  return tex;
+}
+function makeSignTexture(text, color) {
+  const c = document.createElement('canvas'); c.width = 256; c.height = 96;
+  const ctx = c.getContext('2d');
+  ctx.fillStyle = 'rgba(10,10,10,0.0)'; ctx.fillRect(0,0,256,96);
+  ctx.font = 'bold 42px Segoe UI, sans-serif';
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.shadowColor = color; ctx.shadowBlur = 22;
+  ctx.fillStyle = color;
+  ctx.fillText(text, 128, 48);
+  return new THREE.CanvasTexture(c);
+}
+function makeStaticNoiseTexture() {
+  const c = document.createElement('canvas'); c.width = c.height = 128;
+  const ctx = c.getContext('2d');
+  const img = ctx.createImageData(128,128);
+  for (let i=0;i<img.data.length;i+=4){
+    const v = Math.random()*255;
+    img.data[i]=v; img.data[i+1]=v; img.data[i+2]=v; img.data[i+3]=255;
+  }
+  ctx.putImageData(img,0,0);
+  return new THREE.CanvasTexture(c);
+}
+
+// ---------- Strada / piazza ----------
+const ground = new THREE.Mesh(
+  new THREE.PlaneGeometry(50, 40),
+  new THREE.MeshStandardMaterial({ map: makeAsphaltTexture(), roughness: 1 })
+);
+ground.rotation.x = -Math.PI/2;
+cityGroup.add(ground);
+
+// ---------- Edifici ----------
+const windowTexA = makeWindowTexture(1);
+const windowTexB = makeWindowTexture(2);
+const buildingDefs = [
+  { x:-8, z:-7, w:5, h:8,  d:5, tex:windowTexA },
+  { x:0,  z:-8, w:6, h:12, d:6, tex:windowTexB },
+  { x:8,  z:-7, w:5, h:7,  d:5, tex:windowTexA },
+  { x:14, z:-3, w:5, h:6,  d:5, tex:windowTexB },
+  { x:-8, z:4,  w:5, h:5,  d:5, tex:windowTexA, isBar:true, sign:'NEON CAT', signColor:'#ff2fd0' },
+  { x:8,  z:4,  w:5, h:5,  d:5, tex:windowTexB, isBar:true, sign:'ZION BAR', signColor:'#39ff6a' },
+  { x:0,  z:11, w:4, h:4,  d:4, tex:windowTexA, isHome:true },
+  { x:-4.6, z:-1, w:2.6, h:9, d:6, tex:windowTexB } // muro A del vicolo
+];
+const buildingMeshes = [];
+buildingDefs.forEach(def => {
+  const mat = new THREE.MeshStandardMaterial({ map: def.tex, roughness: 0.85 });
+  const mesh = new THREE.Mesh(new THREE.BoxGeometry(def.w, def.h, def.d), mat);
+  mesh.position.set(def.x, def.h/2, def.z);
+  cityGroup.add(mesh);
+  buildingMeshes.push({ mesh, def });
+
+  if (def.isBar) {
+    const signTex = makeSignTexture(def.sign, def.signColor);
+    const sign = new THREE.Sprite(new THREE.SpriteMaterial({ map: signTex, transparent: true }));
+    sign.scale.set(2.2, 0.85, 1);
+    sign.position.set(def.x, def.h + 0.6, def.z + def.d/2 + 0.05);
+    cityGroup.add(sign);
+    // piccola terrazza bar davanti
+    const patio = new THREE.Mesh(new THREE.BoxGeometry(3.2, 0.1, 2.4), new THREE.MeshStandardMaterial({ color: 0x5a4632 }));
+    patio.position.set(def.x, 0.05, def.z + def.d/2 + 1.6);
+    cityGroup.add(patio);
+    const counter = new THREE.Mesh(new THREE.BoxGeometry(2.4, 0.9, 0.5), new THREE.MeshStandardMaterial({ color: 0x3a2a1e }));
+    counter.position.set(def.x, 0.45, def.z + def.d/2 + 2.6);
+    cityGroup.add(counter);
+  }
+});
+
+// Muro gemello per il vicolo segreto
+const alleyWall2 = new THREE.Mesh(
+  new THREE.BoxGeometry(2.6, 9, 6),
+  new THREE.MeshStandardMaterial({ map: windowTexA, roughness: 0.85 })
+);
+alleyWall2.position.set(-0.2, 4.5, -1);
+cityGroup.add(alleyWall2);
+const ALLEY_CENTER_X = -2.4; // punto medio tra muro A (-4.6) e muro B (-0.2)
+const ALLEY_ENTRANCE_Z = 2.2;
+const ALLEY_END_Z = -3.6;
+
+// Porta/botola lampeggiante in fondo al vicolo
+const glitchDoorTex = makeStaticNoiseTexture();
+const doorNormalMat = new THREE.MeshStandardMaterial({ color: 0x151515, roughness: 0.6, emissive: 0x001a08, emissiveIntensity: 0.3 });
+const doorGlitchMat = new THREE.MeshBasicMaterial({ map: glitchDoorTex });
+const secretDoor = new THREE.Mesh(new THREE.BoxGeometry(1.2, 2.2, 0.15), doorNormalMat);
+secretDoor.position.set(ALLEY_CENTER_X, 1.1, ALLEY_END_Z);
+cityGroup.add(secretDoor);
+
+// ---------- Lampioni e panchine ----------
+const lampMat = new THREE.MeshStandardMaterial({ color: 0x2a2a2a, roughness: 0.6 });
+const lampLightMat = new THREE.MeshBasicMaterial({ color: 0xffe9a8 });
+const lampPositions = [[-4,-2],[4,-2],[-4,7],[4,7],[11,1]];
+const streetLamps = [];
+lampPositions.forEach(([x,z]) => {
+  const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.06,0.08,3.4,8), lampMat);
+  pole.position.set(x, 1.7, z);
+  cityGroup.add(pole);
+  const bulb = new THREE.Mesh(new THREE.SphereGeometry(0.16,10,8), lampLightMat);
+  bulb.position.set(x, 3.4, z);
+  cityGroup.add(bulb);
+  const light = new THREE.PointLight(0xffe9a8, 0.7, 6);
+  light.position.set(x, 3.3, z);
+  cityGroup.add(light);
+  streetLamps.push({ bulb, light, baseIntensity: 0.7 });
+});
+
+const benchMat = new THREE.MeshStandardMaterial({ color: 0x5a4632 });
+[[2,-1],[ -2, 6]].forEach(([x,z]) => {
+  const bench = new THREE.Mesh(new THREE.BoxGeometry(1.4,0.4,0.5), benchMat);
+  bench.position.set(x, 0.2, z);
+  cityGroup.add(bench);
+});
+
+// ---------- Piante in vaso (davanti ai bar e a casa) ----------
+const potMat = new THREE.MeshStandardMaterial({ color: 0x7a4a32, roughness: 0.9 });
+const leafMat = new THREE.MeshStandardMaterial({ color: 0x2f7a3d, roughness: 0.7 });
+[[-9.6,6.6],[9.6,6.6],[-1.4,10.2],[1.6,9.9]].forEach(([x,z]) => {
+  const pot = new THREE.Mesh(new THREE.CylinderGeometry(0.22,0.18,0.32,10), potMat);
+  pot.position.set(x, 0.16, z);
+  cityGroup.add(pot);
+  const leaves = new THREE.Mesh(new THREE.IcosahedronGeometry(0.32,0), leafMat);
+  leaves.position.set(x, 0.55, z);
+  leaves.scale.set(1,1.3,1);
+  cityGroup.add(leaves);
+});
+
+// ---------- Polvere/lucciole sospese ----------
+const DUST_COUNT = 60;
+const dustPositions = new Float32Array(DUST_COUNT * 3);
+for (let i=0;i<DUST_COUNT;i++){
+  dustPositions[i*3]   = (Math.random()-0.5) * 34;
+  dustPositions[i*3+1] = Math.random() * 4 + 0.2;
+  dustPositions[i*3+2] = (Math.random()-0.5) * 26;
+}
+const dustGeo = new THREE.BufferGeometry();
+dustGeo.setAttribute('position', new THREE.BufferAttribute(dustPositions, 3));
+const dustMat = new THREE.PointsMaterial({ color: 0xffe9b0, size: 0.05, transparent: true, opacity: 0.55, depthWrite: false });
+const dustPoints = new THREE.Points(dustGeo, dustMat);
+cityGroup.add(dustPoints);
+
+// ---------- Letto (per far passare i giorni) ----------
+const bedGroup = new THREE.Group();
+const bedBase = new THREE.Mesh(new THREE.BoxGeometry(1.6,0.4,2.2), new THREE.MeshStandardMaterial({ color: 0x4a3626 }));
+bedBase.position.y = 0.2;
+const bedPillow = new THREE.Mesh(new THREE.BoxGeometry(1.4,0.15,0.5), new THREE.MeshStandardMaterial({ color: 0xf2ede0 }));
+bedPillow.position.set(0, 0.48, -0.75);
+bedGroup.add(bedBase, bedPillow);
+bedGroup.position.set(1.6, 0, 11.2);
+cityGroup.add(bedGroup);
+const BED_POS = new THREE.Vector3(1.6, 0, 11.2);
+
+// ============================================================
+// NPC
+// ============================================================
+const DIALOGUE_TIERS = [
+  { minDay: 1, lines: [
+      'Bella giornata, vero?',
+      'Il caffè qui è ottimo, dovresti provarlo.',
+      'Ci vediamo domani, stesso posto.'
+  ]},
+  { minDay: 3, lines: [
+      'Hai notato? Ieri è successo esattamente lo stesso.',
+      'Quel gatto nero... giurerei di averlo già visto passare di qui.',
+      'Stanotte ho sentito dei rumori strani dai tubi. Tu no?',
+      'A volte mi sembra che le persone dicano sempre le stesse frasi.'
+  ]},
+  { minDay: 5, lines: [
+      'NON DOVRESTI ESSERE QUI.',
+      'Il cielo... non è mai stato di questo colore.',
+      'Continua a ripetersi. Continua. A. Ripetersi.',
+      'Hai mai provato a guardare cosa c\'è oltre il vicolo?',
+      'Sveglia. Sveglia. Sveglia.'
+  ]}
+];
+function getLineForDay(day) {
+  let pool = DIALOGUE_TIERS[0].lines;
+  for (const tier of DIALOGUE_TIERS) if (day >= tier.minDay) pool = tier.lines;
+  return pool[Math.floor(Math.random()*pool.length)];
+}
+
+const npcs = [];
+const skinMat = new THREE.MeshStandardMaterial({ color: 0xd8a878, roughness: 0.8 });
+const pantsMat = new THREE.MeshStandardMaterial({ color: 0x2b2f3a, roughness: 0.8 });
+const npcDefs = [
+  { x:-6, z:-3, shirt:0xd64545 },
+  { x:3,  z:-4, shirt:0x3d8fd6 },
+  { x:10, z:-3, shirt:0xd6b93d },
+  { x:-6.5, z:6.2, shirt:0x8a3dd6 }, // vicino al bar Neon Cat
+  { x:8.5,  z:6.2, shirt:0x3dd6a0 }, // vicino allo Zion Bar
+  { x:1.5, z:1.2, shirt:0xd67a3d },
+  { x:1.2, z:9.6, shirt:0x999999 }   // vicino a casa
+];
+function makeNPC(shirtColor) {
+  const g = new THREE.Group();
+  const shirtMat = new THREE.MeshStandardMaterial({ color: shirtColor, roughness: 0.7 });
+  const torso = new THREE.Mesh(new THREE.BoxGeometry(0.4,0.6,0.24), shirtMat);
+  torso.position.y = 1.0; g.add(torso);
+  const head = new THREE.Mesh(new THREE.SphereGeometry(0.15,12,10), skinMat);
+  head.position.y = 1.43; g.add(head);
+  const armGeo = new THREE.BoxGeometry(0.11,0.5,0.11);
+  const armL = new THREE.Mesh(armGeo, shirtMat); armL.position.set(0.27,1.02,0); g.add(armL);
+  const armR = new THREE.Mesh(armGeo, shirtMat); armR.position.set(-0.27,1.02,0); g.add(armR);
+  const legGeo = new THREE.BoxGeometry(0.14,0.62,0.14);
+  const legL = new THREE.Mesh(legGeo, pantsMat); legL.position.set(0.11,0.4,0); g.add(legL);
+  const legR = new THREE.Mesh(legGeo, pantsMat); legR.position.set(-0.11,0.4,0); g.add(legR);
+  return g;
+}
+function makeBubble() {
+  const canvas = document.createElement('canvas'); canvas.width=512; canvas.height=160;
+  const tex = new THREE.CanvasTexture(canvas);
+  const mat = new THREE.SpriteMaterial({ map: tex, transparent: true });
+  const sprite = new THREE.Sprite(mat);
+  sprite.scale.set(1.4, 0.44, 1);
+  sprite.visible = false;
+  return { sprite, canvas, tex };
+}
+function drawBubble(bubble, text) {
+  const ctx = bubble.canvas.getContext('2d');
+  ctx.clearRect(0,0,512,160);
+  ctx.fillStyle = 'rgba(15,20,20,0.85)';
+  roundRect(ctx, 6,6,500,148,18); ctx.fill();
+  ctx.strokeStyle = 'rgba(255,255,255,0.35)'; ctx.lineWidth=2;
+  roundRect(ctx, 6,6,500,148,18); ctx.stroke();
+  ctx.fillStyle = '#eef6f2';
+  ctx.font = '26px Segoe UI, sans-serif';
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  wrapText(ctx, text, 256, 80, 460, 32);
+  bubble.tex.needsUpdate = true;
+}
+function roundRect(ctx,x,y,w,h,r){
+  ctx.beginPath();
+  ctx.moveTo(x+r,y);
+  ctx.arcTo(x+w,y,x+w,y+h,r);
+  ctx.arcTo(x+w,y+h,x,y+h,r);
+  ctx.arcTo(x,y+h,x,y,r);
+  ctx.arcTo(x,y,x+w,y,r);
+  ctx.closePath();
+}
+function wrapText(ctx, text, cx, cy, maxWidth, lineHeight) {
+  const words = text.split(' ');
+  let line = ''; const lines = [];
+  words.forEach(w => {
+    const test = line + w + ' ';
+    if (ctx.measureText(test).width > maxWidth && line) { lines.push(line); line = w + ' '; }
+    else line = test;
+  });
+  lines.push(line);
+  const startY = cy - (lines.length-1)*lineHeight/2;
+  lines.forEach((l,i) => ctx.fillText(l.trim(), cx, startY + i*lineHeight));
+}
+
+npcDefs.forEach(def => {
+  const group = makeNPC(def.shirt);
+  group.position.set(def.x, 0, def.z);
+  const angle = Math.atan2(-def.x, -def.z);
+  group.rotation.y = angle;
+  cityGroup.add(group);
+  const bubble = makeBubble();
+  bubble.sprite.position.set(0, 1.95, 0);
+  group.add(bubble.sprite);
+  npcs.push({ group, bubble, hideAt: 0 });
+});
+
+// ============================================================
+// VUOTO — fuori da Matrix (noclip)
+// ============================================================
+function makeCodeTexture() {
+  const c = document.createElement('canvas'); c.width=256; c.height=512;
+  const ctx = c.getContext('2d');
+  ctx.fillStyle = '#000'; ctx.fillRect(0,0,256,512);
+  ctx.font = '18px monospace';
+  const glyphs = '01アイウエオカキクケコ';
+  for (let col=0; col<12; col++){
+    const x = col*22;
+    const brightCount = 3+Math.floor(Math.random()*4);
+    for (let row=0; row<26; row++){
+      const y = row*20;
+      const isBright = row < brightCount;
+      ctx.fillStyle = isBright ? 'rgba(180,255,200,0.95)' : `rgba(0,255,65,${0.15+Math.random()*0.35})`;
+      ctx.fillText(glyphs[Math.floor(Math.random()*glyphs.length)], x, y);
+    }
+  }
+  const tex = new THREE.CanvasTexture(c);
+  tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+  tex.repeat.set(8,4);
+  return tex;
+}
+const voidCodeTex = makeCodeTexture();
+const voidCylinder = new THREE.Mesh(
+  new THREE.CylinderGeometry(22,22,26,32,1,true),
+  new THREE.MeshBasicMaterial({ map: voidCodeTex, transparent:true, opacity:0.6, side:THREE.BackSide, blending:THREE.AdditiveBlending, depthWrite:false })
+);
+voidCylinder.position.y = 6;
+voidGroup.add(voidCylinder);
+
+const debrisMat = new THREE.MeshBasicMaterial({ color: 0x00ff41, wireframe: true });
+const debris = [];
+for (let i=0;i<18;i++){
+  const geo = new THREE.IcosahedronGeometry(0.3 + Math.random()*0.7, 0);
+  const mesh = new THREE.Mesh(geo, debrisMat);
+  const ang = Math.random()*Math.PI*2, rad = 4+Math.random()*14;
+  mesh.position.set(Math.cos(ang)*rad, Math.random()*10-2, Math.sin(ang)*rad);
+  voidGroup.add(mesh);
+  debris.push(mesh);
+}
+
+const returnPortal = new THREE.Group();
+const returnRing = new THREE.Mesh(new THREE.TorusGeometry(1.1,0.14,12,24), new THREE.MeshStandardMaterial({ color:0xffffff, emissive:0x00ff41, emissiveIntensity:1 }));
+const returnLight = new THREE.PointLight(0x00ff41, 1.4, 8);
+returnPortal.add(returnRing, returnLight);
+returnPortal.position.set(0, 1.4, 0);
+voidGroup.add(returnPortal);
+
+// ============================================================
+// STATO DI GIOCO
+// ============================================================
+let dayCount = 1;
+let strangeness = 0;
+const SECRET_DAY_THRESHOLD = 3;
+let mode = 'teleport'; // 'teleport' in città, 'noclip' nel vuoto
+const clock = new THREE.Clock();
+let elapsed = 0;
+
+function speak(npc) {
+  drawBubble(npc.bubble, getLineForDay(dayCount));
+  npc.bubble.sprite.visible = true;
+  npc.hideAt = elapsed + 4.5;
+}
+
+function advanceDay() {
+  dayCount += 1;
+  strangeness = Math.min(1, (dayCount - 1) / 7);
+  flashOverlay(0.6, 0.5);
+  skyUniforms.bottomColor.value.copy(new THREE.Color(0xcfe8f2)).lerp(new THREE.Color(0x7a9f7f), strangeness);
+  skyUniforms.topColor.value.copy(new THREE.Color(0x2b6fa8)).lerp(new THREE.Color(0x1f3f2a), strangeness);
+  scene.fog.color.copy(FOG_NORMAL).lerp(FOG_STRANGE, strangeness);
+}
+
+function enterVoid() {
+  flashOverlay(1, 0.6);
+  cityGroup.visible = false;
+  voidGroup.visible = true;
+  mode = 'noclip';
+  cameraRig.position.set(0, 0, 6);
+}
+function exitVoid() {
+  flashOverlay(1, 0.6);
+  cityGroup.visible = true;
+  voidGroup.visible = false;
+  mode = 'teleport';
+  cameraRig.position.set(ALLEY_CENTER_X, 0, ALLEY_ENTRANCE_Z + 1.5);
+}
+
+// ---------- Overlay glitch/fade (piano attaccato alla camera) ----------
+const noiseTex = makeStaticNoiseTexture();
+const overlayMat = new THREE.MeshBasicMaterial({ map: noiseTex, transparent:true, opacity:0, depthTest:false });
+const overlayPlane = new THREE.Mesh(new THREE.PlaneGeometry(4,4), overlayMat);
+overlayPlane.position.set(0,0,-0.3);
+overlayPlane.renderOrder = 1000;
+camera.add(overlayPlane);
+let overlayTimer = 0, overlayDuration = 0, overlayPeak = 0;
+function flashOverlay(peak, duration) {
+  overlayPeak = peak; overlayDuration = duration; overlayTimer = duration;
+}
+function updateOverlay(dt) {
+  if (overlayTimer > 0) {
+    overlayTimer -= dt;
+    const k = Math.max(0, overlayTimer / overlayDuration);
+    overlayMat.opacity = Math.sin(k*Math.PI) * overlayPeak;
+  } else {
+    overlayMat.opacity = 0;
+  }
+}
+
+// Piccolo pannello info (giorno corrente), attaccato alla camera
+const infoCanvas = document.createElement('canvas'); infoCanvas.width=400; infoCanvas.height=100;
+const infoTex = new THREE.CanvasTexture(infoCanvas);
+const infoMat = new THREE.MeshBasicMaterial({ map: infoTex, transparent:true, depthTest:false });
+const infoPlane = new THREE.Mesh(new THREE.PlaneGeometry(0.4,0.1), infoMat);
+infoPlane.position.set(0.32,-0.32,-0.7);
+infoPlane.renderOrder = 999;
+camera.add(infoPlane);
+function drawInfo() {
+  const ctx = infoCanvas.getContext('2d');
+  ctx.clearRect(0,0,400,100);
+  ctx.fillStyle = 'rgba(10,15,15,0.5)'; ctx.fillRect(0,0,400,100);
+  ctx.fillStyle = '#eef6f2'; ctx.font='24px Segoe UI, sans-serif';
+  ctx.fillText('Giorno ' + dayCount, 20, 42);
+  ctx.font='14px Segoe UI, sans-serif'; ctx.fillStyle='rgba(255,255,255,0.7)';
+  ctx.fillText(mode === 'noclip' ? 'fuori dalla simulazione... (tieni il grilletto per volare)' : 'grilletto per interagire', 20, 70);
+  infoTex.needsUpdate = true;
+}
+drawInfo();
+
+// ============================================================
+// CONTROLLER + MANI VISIBILI (stilizzate, al posto dei controller)
+// ============================================================
+function makeHandMesh(color) {
+  const g = new THREE.Group();
+  const skinMat = new THREE.MeshStandardMaterial({ color, roughness: 0.55 });
+  const palm = new THREE.Mesh(new THREE.BoxGeometry(0.085, 0.03, 0.09), skinMat);
+  palm.position.set(0, 0, -0.05);
+  g.add(palm);
+  const fingerGeo = new THREE.CylinderGeometry(0.009, 0.009, 0.065, 6);
+  for (let i = 0; i < 4; i++) {
+    const finger = new THREE.Mesh(fingerGeo, skinMat);
+    finger.position.set(-0.03 + i * 0.02, 0.005, -0.1);
+    finger.rotation.x = Math.PI / 2 - 0.35;
+    g.add(finger);
+  }
+  const thumb = new THREE.Mesh(new THREE.CylinderGeometry(0.01, 0.01, 0.05, 6), skinMat);
+  thumb.position.set(0.05, 0.01, -0.02);
+  thumb.rotation.z = Math.PI / 2.3;
+  g.add(thumb);
+  return g;
+}
+
+const controller0 = renderer.xr.getController(0);
+const controller1 = renderer.xr.getController(1);
+[controller0, controller1].forEach(controller => {
+  controller.addEventListener('connected', (e) => {
+    controller.userData.handedness = e.data.handedness;
+    controller.userData.gamepad = e.data.gamepad;
+    controller.userData.prevButtons = [];
+  });
+  controller.addEventListener('disconnected', () => {
+    controller.userData.handedness = null;
+    controller.userData.gamepad = null;
+  });
+  scene.add(controller);
+});
+
+const grip0 = renderer.xr.getControllerGrip(0);
+grip0.add(makeHandMesh(0xd8a878));
+scene.add(grip0);
+const grip1 = renderer.xr.getControllerGrip(1);
+grip1.add(makeHandMesh(0xd8a878));
+scene.add(grip1);
+
+function isInsideAnyBuilding(x, z, margin) {
+  for (const b of buildingMeshes) {
+    const d = b.def;
+    if (Math.abs(x - d.x) < d.w/2 + margin && Math.abs(z - d.z) < d.d/2 + margin) return true;
+  }
+  if (Math.abs(x - alleyWall2.position.x) < 1.3 + margin && Math.abs(z - alleyWall2.position.z) < 3 + margin) return true;
+  return false;
+}
+
+const CITY_BOUNDS = { minX:-18, maxX:20, minZ:-13, maxZ:15 };
+const MOVE_SPEED = 2.3;
+let lastSnapTime = 0;
+
+function getControllerRay(controller) {
+  const origin = new THREE.Vector3();
+  controller.getWorldPosition(origin);
+  const quat = new THREE.Quaternion();
+  controller.getWorldQuaternion(quat);
+  const dir = new THREE.Vector3(0, 0, -1).applyQuaternion(quat);
+  return { origin, dir };
+}
+
+function tryInteract() {
+  // priorità 1: parlare con un NPC vicino
+  for (const npc of npcs) {
+    if (cameraRig.position.distanceTo(npc.group.position) < 1.6) {
+      speak(npc);
+      return true;
+    }
+  }
+  // priorità 2: letto -> avanza giorno
+  if (mode === 'teleport' && cameraRig.position.distanceTo(BED_POS) < 1.6) {
+    advanceDay();
+    return true;
+  }
+  // priorità 3: vicolo segreto
+  if (mode === 'teleport') {
+    const nearAlleyEnd = Math.abs(cameraRig.position.x - ALLEY_CENTER_X) < 1.1 &&
+                          Math.abs(cameraRig.position.z - ALLEY_END_Z) < 1.3;
+    if (nearAlleyEnd) {
+      if (dayCount >= SECRET_DAY_THRESHOLD) enterVoid();
+      else flashOverlay(0.25, 0.3);
+      return true;
+    }
+  }
+  // priorità 4 (nel vuoto): tornare dal portale
+  if (mode === 'noclip' && cameraRig.position.distanceTo(returnPortal.position) < 1.6) {
+    exitVoid();
+    return true;
+  }
+  return false;
+}
+
+function updateInput(dt) {
+  [controller0, controller1].forEach(controller => {
+    const gp = controller.userData.gamepad;
+    if (!gp) return;
+    const hand = controller.userData.handedness;
+    const axes = gp.axes || [];
+    const buttons = gp.buttons || [];
+    const prev = controller.userData.prevButtons || [];
+
+    if (hand === 'left') {
+      const x = axes[2] || 0, y = axes[3] || 0;
+      if (Math.hypot(x, y) > 0.15) {
+        const quat = camera.getWorldQuaternion(new THREE.Quaternion());
+        const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(quat); forward.y = 0; forward.normalize();
+        const right = new THREE.Vector3(1, 0, 0).applyQuaternion(quat); right.y = 0; right.normalize();
+        const move = new THREE.Vector3();
+        move.addScaledVector(forward, -y);
+        move.addScaledVector(right, x);
+        if (move.lengthSq() > 0) {
+          move.normalize().multiplyScalar(MOVE_SPEED * dt);
+          const newPos = cameraRig.position.clone().add(move);
+          if (mode === 'teleport') {
+            newPos.x = THREE.MathUtils.clamp(newPos.x, CITY_BOUNDS.minX, CITY_BOUNDS.maxX);
+            newPos.z = THREE.MathUtils.clamp(newPos.z, CITY_BOUNDS.minZ, CITY_BOUNDS.maxZ);
+            if (!isInsideAnyBuilding(newPos.x, newPos.z, 0.35)) cameraRig.position.copy(newPos);
+          } else {
+            cameraRig.position.copy(newPos); // nel vuoto: nessuna collisione
+          }
+        }
+      }
+    } else if (hand === 'right') {
+      const x = axes[2] || 0;
+      if (Math.abs(x) > 0.6 && elapsed - lastSnapTime > 0.35) {
+        cameraRig.rotation.y -= Math.sign(x) * (Math.PI / 6);
+        lastSnapTime = elapsed;
+      }
+    }
+
+    // grilletto: interagisci (edge) oppure, nel vuoto, tienilo premuto per volare
+    if (buttons[0] && buttons[0].pressed && !prev[0]) {
+      tryInteract();
+    }
+    if (mode === 'noclip' && buttons[0] && buttons[0].pressed) {
+      const ray = getControllerRay(controller);
+      cameraRig.position.addScaledVector(ray.dir, 2.6 * dt);
+    }
+
+    controller.userData.prevButtons = buttons.map(b => !!b.pressed);
+  });
+}
+
+// ============================================================
+// EFFETTI "STRANEZZA"
+// ============================================================
+function updateGlitches(dt) {
+  const chance = strangeness * 0.6 * dt;
+  if (Math.random() < chance) {
+    const lamp = streetLamps[Math.floor(Math.random()*streetLamps.length)];
+    lamp.light.intensity = 0.05;
+    setTimeout(() => { lamp.light.intensity = lamp.baseIntensity; }, 120);
+  }
+  if (Math.random() < chance * 0.5) {
+    flashOverlay(0.15 + strangeness*0.2, 0.2);
+  }
+}
+
+// ---------- NPC bubble fade ----------
+function updateNpcs() {
+  npcs.forEach(n => {
+    if (n.bubble.sprite.visible && elapsed > n.hideAt) n.bubble.sprite.visible = false;
+  });
+}
+
+function updateDebris(dt, t) {
+  debris.forEach((m,i) => {
+    m.rotation.x += dt*0.3; m.rotation.y += dt*0.4;
+    m.position.y += Math.sin(t*0.5+i)*0.002;
+  });
+  returnRing.rotation.z += dt*0.4;
+}
+
+// ---------- Loop ----------
+function animate() {
+  const dt = Math.min(clock.getDelta(), 0.05);
+  elapsed += dt;
+
+  updateInput(dt);
+  updateGlitches(dt);
+  updateNpcs();
+  if (mode === 'noclip') updateDebris(dt, elapsed);
+  updateOverlay(dt);
+
+  if (elapsed % 0.5 < dt) drawInfo();
+
+  if (renderer.xr.isPresenting) {
+    // Rendering diretto in VR: il composer/bloom può causare schermo nero
+    // dentro una sessione WebXR, quindi qui saltiamo il post-processing.
+    renderer.render(scene, camera);
+  } else {
+    previewControls.update();
+    composer.render();
+  }
+}
+renderer.xr.addEventListener('sessionstart', () => document.getElementById('ui').classList.add('hidden'));
+renderer.xr.addEventListener('sessionend', () => document.getElementById('ui').classList.remove('hidden'));
+
+renderer.setAnimationLoop(animate);
+</script>
+</body>
+</html>
