@@ -1,0 +1,841 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>Sogno Lucido — VR</title>
+<style>
+  :root{ --foam:#eef0f6; --violet:#7a5cff; --green:#39ff9a; }
+  *{ box-sizing:border-box; }
+  html,body{
+    margin:0; padding:0; height:100%; overflow:hidden;
+    background:radial-gradient(ellipse at 50% 20%, #241a3d 0%, #0a0714 75%);
+    font-family:'Segoe UI', system-ui, sans-serif; color:var(--foam);
+  }
+  canvas{ display:block; }
+  #ui{
+    position:fixed; inset:0; pointer-events:none;
+    display:flex; flex-direction:column; align-items:center;
+    padding:30px 16px; z-index:5;
+  }
+  #ui.hidden{ display:none; }
+  #titleCard{ text-align:center; text-shadow:0 2px 14px rgba(0,0,0,0.6); max-width:520px; }
+  #titleCard h1{ margin:0; font-size:clamp(1.6rem,5vw,2.4rem); font-weight:300; letter-spacing:1px; }
+  #titleCard h1 b{ color:#a78bff; font-weight:600; }
+  #titleCard p{ margin:10px 0 0; font-size:0.85rem; opacity:0.85; line-height:1.6; }
+  .note{
+    margin-top:16px; font-size:0.75rem; opacity:0.75;
+    background:rgba(0,0,0,0.35); border:1px solid rgba(255,255,255,0.2);
+    padding:10px 16px; border-radius:8px; max-width:440px; text-align:left; line-height:1.5;
+  }
+  #VRButton{
+    position:fixed !important; bottom:26px !important; left:50% !important;
+    transform:translateX(-50%);
+    background:rgba(20,10,35,0.7) !important;
+    border:1px solid #a78bff !important;
+    color:#eef0f6 !important;
+    border-radius:8px !important;
+  }
+</style>
+</head>
+<body>
+
+<div id="ui">
+  <div id="titleCard">
+    <h1>Sogno <b>Lucido</b></h1>
+    <p>Fluttui in un sogno che assomiglia troppo a Matrix. Vola tra le stanze, tocca ciò che non torna, e quando vuoi apri il menu dei comandi per decidere cosa fare del sogno.</p>
+    <div class="note">
+      Si gioca con i controller. Appena entri, avvicina la mano al pulsante fluttuante e premi il grilletto per iniziare il sogno. Sul dorso di una mano trovi una sfera: toccala con l'altra mano (grilletto) per aprire il menu dei poteri (volo compreso). Stick destro: girati.
+    </div>
+  </div>
+</div>
+
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+  }
+}
+</script>
+
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { VRButton } from 'three/addons/webxr/VRButton.js';
+
+/* ============================================================
+   SOGNO LUCIDO — VR con controller
+   Volo libero (nessuna collisione: è un sogno), stanze surreali,
+   menu dei comandi apribile con il tasto A/X del controller.
+   Niente post-processing: solo renderer.render diretto, per
+   evitare i problemi di schermo nero visti nei progetti precedenti.
+   ============================================================ */
+
+// ---------- Renderer / Scene / Camera / Rig ----------
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.xr.enabled = true;
+renderer.outputColorSpace = THREE.SRGBColorSpace;
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+document.body.appendChild(renderer.domElement);
+document.body.appendChild(VRButton.createButton(renderer, { optionalFeatures: ['local-floor'] }));
+
+const scene = new THREE.Scene();
+scene.fog = new THREE.FogExp2(0x1a1330, 0.028);
+
+// ---------- Cielo sfumato onirico ----------
+const skyUniforms = {
+  topColor: { value: new THREE.Color(0x2a1a4a) },
+  bottomColor: { value: new THREE.Color(0x6a3f7a) },
+  offset: { value: 10 },
+  exponent: { value: 0.75 }
+};
+const skyMat = new THREE.ShaderMaterial({
+  uniforms: skyUniforms,
+  vertexShader: `
+    varying vec3 vWorldPosition;
+    void main(){
+      vec4 wp = modelMatrix * vec4(position,1.0);
+      vWorldPosition = wp.xyz;
+      gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.0);
+    }`,
+  fragmentShader: `
+    uniform vec3 topColor; uniform vec3 bottomColor; uniform float offset; uniform float exponent;
+    varying vec3 vWorldPosition;
+    void main(){
+      float h = normalize(vWorldPosition + vec3(0.0, offset, 0.0)).y;
+      gl_FragColor = vec4(mix(bottomColor, topColor, max(pow(max(h,0.0), exponent), 0.0)), 1.0);
+    }`,
+  side: THREE.BackSide
+});
+const sky = new THREE.Mesh(new THREE.SphereGeometry(60, 24, 14), skyMat);
+scene.add(sky);
+
+const camera = new THREE.PerspectiveCamera(65, window.innerWidth / window.innerHeight, 0.05, 100);
+camera.position.set(0, 1.6, 4);
+
+const cameraRig = new THREE.Group();
+cameraRig.add(camera);
+scene.add(cameraRig);
+
+window.addEventListener('resize', () => {
+  renderer.setSize(window.innerWidth, window.innerHeight);
+  camera.aspect = window.innerWidth / window.innerHeight;
+  camera.updateProjectionMatrix();
+});
+
+const previewControls = new OrbitControls(camera, renderer.domElement);
+previewControls.target.set(0, 1.6, 3);
+previewControls.enableDamping = true;
+previewControls.enablePan = false;
+previewControls.enableZoom = false;
+previewControls.minDistance = 1;
+previewControls.maxDistance = 1;
+previewControls.update();
+
+// ---------- Luci ----------
+const hemi = new THREE.HemisphereLight(0x9b8cff, 0x160f28, 0.85);
+scene.add(hemi);
+const glow = new THREE.PointLight(0x7a5cff, 1.1, 20);
+glow.position.set(0, 4, 0);
+scene.add(glow);
+
+// ---------- Texture helper ----------
+function makeCodeTexture() {
+  const c = document.createElement('canvas'); c.width = 256; c.height = 512;
+  const ctx = c.getContext('2d');
+  ctx.fillStyle = '#000'; ctx.fillRect(0,0,256,512);
+  ctx.font = '18px monospace';
+  const glyphs = '01アイウエオカキクケコ';
+  for (let col=0; col<12; col++){
+    const x = col*22;
+    const brightCount = 3+Math.floor(Math.random()*4);
+    for (let row=0; row<26; row++){
+      const y = row*20;
+      const isBright = row < brightCount;
+      ctx.fillStyle = isBright ? 'rgba(190,255,210,0.95)' : `rgba(57,255,154,${0.12+Math.random()*0.3})`;
+      ctx.fillText(glyphs[Math.floor(Math.random()*glyphs.length)], x, y);
+    }
+  }
+  const tex = new THREE.CanvasTexture(c);
+  tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+  tex.repeat.set(7,3);
+  return tex;
+}
+function makeGlowTexture(color) {
+  const c = document.createElement('canvas'); c.width = c.height = 128;
+  const ctx = c.getContext('2d');
+  const grad = ctx.createRadialGradient(64,64,0,64,64,64);
+  grad.addColorStop(0, color); grad.addColorStop(1, 'rgba(0,0,0,0)');
+  ctx.fillStyle = grad; ctx.fillRect(0,0,128,128);
+  return new THREE.CanvasTexture(c);
+}
+function makeLabelTexture(text, w, h, fontSize, bg) {
+  const c = document.createElement('canvas'); c.width = w; c.height = h;
+  const ctx = c.getContext('2d');
+  if (bg) { ctx.fillStyle = bg; roundRect(ctx, 0,0,w,h,14); ctx.fill(); }
+  ctx.fillStyle = '#eef0f6';
+  ctx.font = `${fontSize}px Segoe UI, sans-serif`;
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.fillText(text, w/2, h/2);
+  return new THREE.CanvasTexture(c);
+}
+function roundRect(ctx,x,y,w,h,r){
+  ctx.beginPath();
+  ctx.moveTo(x+r,y);
+  ctx.arcTo(x+w,y,x+w,y+h,r);
+  ctx.arcTo(x+w,y+h,x,y+h,r);
+  ctx.arcTo(x,y+h,x,y,r);
+  ctx.arcTo(x,y,x+w,y,r);
+  ctx.closePath();
+}
+
+// ---------- Pioggia di codice, sempre presente sullo sfondo ----------
+const codeTex = makeCodeTexture();
+const codeCylinder = new THREE.Mesh(
+  new THREE.CylinderGeometry(20,20,24,32,1,true),
+  new THREE.MeshBasicMaterial({ map: codeTex, transparent:true, opacity:0.4, side:THREE.BackSide, blending:THREE.AdditiveBlending, depthWrite:false })
+);
+codeCylinder.position.y = 5;
+scene.add(codeCylinder);
+
+// ---------- Detriti fluttuanti decorativi (cristalli luminosi) ----------
+const debrisPalette = [0x7a5cff, 0x39ff9a, 0xff6ad5, 0x5cc9ff];
+const debris = [];
+for (let i=0;i<18;i++){
+  const color = debrisPalette[i % debrisPalette.length];
+  const geo = new THREE.IcosahedronGeometry(0.22+Math.random()*0.5, 0);
+  const solid = i % 3 !== 0;
+  const mat = solid
+    ? new THREE.MeshStandardMaterial({ color, emissive: color, emissiveIntensity: 0.65, roughness: 0.3, metalness: 0.2, transparent:true, opacity:0.85 })
+    : new THREE.MeshBasicMaterial({ color, wireframe: true });
+  const mesh = new THREE.Mesh(geo, mat);
+  const ang = Math.random()*Math.PI*2, rad = 4+Math.random()*13;
+  mesh.position.set(Math.cos(ang)*rad, Math.random()*8-2, Math.sin(ang)*rad);
+  scene.add(mesh);
+  debris.push(mesh);
+}
+
+// ---------- Sfere di luce fluttuanti (atmosfera) ----------
+const glowOrbColors = ['rgba(122,92,255,1)', 'rgba(57,255,154,1)', 'rgba(255,106,213,1)', 'rgba(92,201,255,1)'];
+for (let i=0;i<7;i++){
+  const color = glowOrbColors[i % glowOrbColors.length];
+  const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: makeGlowTexture(color), transparent:true, depthWrite:false, blending:THREE.AdditiveBlending }));
+  const ang = Math.random()*Math.PI*2, rad = 6+Math.random()*10;
+  sprite.position.set(Math.cos(ang)*rad, 1+Math.random()*6, Math.sin(ang)*rad);
+  sprite.scale.set(2.4,2.4,1);
+  scene.add(sprite);
+  const light = new THREE.PointLight(new THREE.Color(color), 0.6, 9);
+  light.position.copy(sprite.position);
+  scene.add(light);
+}
+
+// ---------- Pulviscolo onirico ----------
+const DUST_COUNT = 90;
+const dustPositions = new Float32Array(DUST_COUNT*3);
+for (let i=0;i<DUST_COUNT;i++){
+  dustPositions[i*3]   = (Math.random()-0.5)*30;
+  dustPositions[i*3+1] = Math.random()*10-2;
+  dustPositions[i*3+2] = (Math.random()-0.5)*30;
+}
+const dustGeo = new THREE.BufferGeometry();
+dustGeo.setAttribute('position', new THREE.BufferAttribute(dustPositions,3));
+const dustPoints = new THREE.Points(dustGeo, new THREE.PointsMaterial({ color:0xd8c9ff, size:0.045, transparent:true, opacity:0.5, depthWrite:false }));
+scene.add(dustPoints);
+
+// ============================================================
+// INTRO — pulsante "Inizia il sogno"
+// ============================================================
+const introGroup = new THREE.Group();
+scene.add(introGroup);
+const introBtnMat = new THREE.MeshBasicMaterial({
+  map: makeLabelTexture('✨ Inizia il sogno', 460, 110, 30, 'rgba(122,92,255,0.35)'),
+  transparent:true, depthTest:false, side:THREE.DoubleSide
+});
+const introButton = new THREE.Mesh(new THREE.PlaneGeometry(0.55, 0.13), introBtnMat);
+introButton.position.set(0, 1.45, -0.55);
+introGroup.add(introButton);
+const introGlow = new THREE.Sprite(new THREE.SpriteMaterial({ map: makeGlowTexture('rgba(122,92,255,0.9)'), transparent:true, depthWrite:false, blending:THREE.AdditiveBlending }));
+introGlow.scale.set(1.6,1.6,1);
+introGlow.position.set(0, 1.45, -0.57);
+introGroup.add(introGlow);
+
+// forme geometriche fluttuanti (decorazione della scena iniziale)
+const introShapeGeos = [
+  new THREE.IcosahedronGeometry(0.3, 0),
+  new THREE.TorusGeometry(0.26, 0.09, 10, 20),
+  new THREE.TetrahedronGeometry(0.32, 0),
+  new THREE.OctahedronGeometry(0.28, 0),
+  new THREE.BoxGeometry(0.4,0.4,0.4),
+  new THREE.ConeGeometry(0.26,0.5,12)
+];
+const introShapeColors = [0x7a5cff, 0x39ff9a, 0xff6ad5, 0x5cc9ff, 0xffd166, 0xff6b6b];
+const introShapes = [];
+for (let i=0;i<10;i++){
+  const geo = introShapeGeos[i % introShapeGeos.length];
+  const color = introShapeColors[i % introShapeColors.length];
+  const mat = new THREE.MeshStandardMaterial({ color, emissive: color, emissiveIntensity: 0.5, roughness: 0.35, metalness: 0.2 });
+  const mesh = new THREE.Mesh(geo, mat);
+  const ang = (i / 10) * Math.PI * 2;
+  const rad = 2.4 + Math.random()*1.2;
+  mesh.position.set(Math.cos(ang)*rad, 0.8 + Math.random()*1.8, Math.sin(ang)*rad - 1.6);
+  mesh.userData.spinX = (Math.random()-0.5)*0.6;
+  mesh.userData.spinY = (Math.random()-0.5)*0.6;
+  mesh.userData.bobPhase = Math.random()*Math.PI*2;
+  mesh.userData.baseY = mesh.position.y;
+  introGroup.add(mesh);
+  introShapes.push(mesh);
+}
+
+// ============================================================
+// STANZE DEL SOGNO
+// ============================================================
+const roomA = new THREE.Group(); // La Scala Impossibile
+const roomB = new THREE.Group(); // La Strada Capovolta
+const roomCity = new THREE.Group(); // La Città che Ricordo
+const roomC = new THREE.Group(); // Il Vuoto di Codice
+scene.add(roomA, roomB, roomCity, roomC);
+
+const interactables = []; // {mesh, action, radius}
+
+// ---------- Stanza A: la scala impossibile ----------
+const stepMat = new THREE.MeshStandardMaterial({ color: 0x3a2f5c, roughness: 0.6, emissive: 0x241a3d, emissiveIntensity: 0.4 });
+const stepCount = 16;
+for (let i=0;i<stepCount;i++){
+  const ang = (i/stepCount) * Math.PI * 2.4;
+  const rad = 5;
+  const y = i * 0.32 - 2;
+  const step = new THREE.Mesh(new THREE.BoxGeometry(1.6,0.25,1.1), stepMat);
+  step.position.set(Math.cos(ang)*rad, y, Math.sin(ang)*rad);
+  step.rotation.y = -ang;
+  roomA.add(step);
+}
+// orologio fluttuante (déjà vu, ricomparirà anche altrove)
+function makeClock() {
+  const g = new THREE.Group();
+  const face = new THREE.Mesh(new THREE.CylinderGeometry(0.6,0.6,0.08,24), new THREE.MeshStandardMaterial({ color:0xece6d8, roughness:0.5 }));
+  face.rotation.x = Math.PI/2;
+  g.add(face);
+  const rim = new THREE.Mesh(new THREE.TorusGeometry(0.6,0.05,10,24), new THREE.MeshStandardMaterial({ color:0x2a2340, metalness:0.6, roughness:0.3 }));
+  g.add(rim);
+  const hourHand = new THREE.Mesh(new THREE.BoxGeometry(0.05,0.32,0.02), new THREE.MeshStandardMaterial({ color:0x1a1330 }));
+  hourHand.position.set(0,0.14,0.045); hourHand.rotation.z = 0.6;
+  g.add(hourHand);
+  const minHand = new THREE.Mesh(new THREE.BoxGeometry(0.04,0.46,0.02), new THREE.MeshStandardMaterial({ color:0x1a1330 }));
+  minHand.position.set(0,0.2,0.05); minHand.rotation.z = -1.4;
+  g.add(minHand);
+  return g;
+}
+const clockA = makeClock();
+clockA.position.set(-2.5, 2.2, -1);
+clockA.rotation.y = 0.6;
+roomA.add(clockA);
+
+// porta verso la Stanza B
+function makeDoor(color) {
+  const g = new THREE.Group();
+  const frame = new THREE.Mesh(new THREE.BoxGeometry(1.3,2.4,0.12), new THREE.MeshStandardMaterial({ color:0x1c1730, roughness:0.7 }));
+  g.add(frame);
+  const glowPlane = new THREE.Sprite(new THREE.SpriteMaterial({ map: makeGlowTexture(color), transparent:true, depthWrite:false, blending:THREE.AdditiveBlending }));
+  glowPlane.scale.set(3,3,1);
+  glowPlane.position.z = 0.1;
+  g.add(glowPlane);
+  return g;
+}
+const doorAtoB = makeDoor('rgba(122,92,255,1)');
+doorAtoB.position.set(0, 1.3, -6);
+roomA.add(doorAtoB);
+interactables.push({ mesh: doorAtoB, radius: 1.8, action: () => goToRoom(1) });
+
+// ---------- Stanza B: la strada capovolta ----------
+const roadMat = new THREE.MeshStandardMaterial({ color: 0x1c2430, roughness: 0.9 });
+const road = new THREE.Mesh(new THREE.PlaneGeometry(20,20), roadMat);
+road.rotation.x = Math.PI/2; // capovolta: sta "sopra"
+road.position.y = 4.5;
+roomB.add(road);
+
+const houseMat = new THREE.MeshStandardMaterial({ color: 0x2c2440, roughness: 0.8 });
+for (let i=0;i<6;i++){
+  const h = 1.4 + Math.random()*1.6;
+  const house = new THREE.Mesh(new THREE.BoxGeometry(1.6, h, 1.6), houseMat);
+  const ang = (i/6)*Math.PI*2;
+  house.position.set(Math.cos(ang)*5, 4.5 + h/2, Math.sin(ang)*5);
+  house.rotation.x = Math.PI; // capovolte
+  roomB.add(house);
+}
+const clockB = makeClock();
+clockB.position.set(3, 1.5, -2);
+clockB.rotation.y = -0.8;
+roomB.add(clockB);
+
+// specchio: tocca per un flash "sveglia" (solo effetto, non conclude il sogno)
+const mirrorFrame = new THREE.Mesh(new THREE.TorusGeometry(0.9,0.09,12,28), new THREE.MeshStandardMaterial({ color:0xcfd6ff, metalness:0.7, roughness:0.25 }));
+const mirrorGlass = new THREE.Mesh(new THREE.CircleGeometry(0.82,28), new THREE.MeshStandardMaterial({ color:0x9ab6ff, metalness:0.9, roughness:0.05, emissive:0x334477, emissiveIntensity:0.3 }));
+mirrorGlass.position.z = 0.02;
+const mirror = new THREE.Group();
+mirror.add(mirrorFrame, mirrorGlass);
+mirror.position.set(-3, 1.5, -1);
+mirror.rotation.y = 0.5;
+roomB.add(mirror);
+interactables.push({ mesh: mirror, radius: 1.6, action: () => flashOverlay(0.6, 0.5) });
+
+const doorBtoC = makeDoor('rgba(57,255,154,1)');
+doorBtoC.position.set(0, 1.3, -6);
+roomB.add(doorBtoC);
+interactables.push({ mesh: doorBtoC, radius: 1.8, action: () => goToRoom(2) });
+
+// ---------- Stanza Città: la città che ricordo (edifici fluttuanti, un po' storti) ----------
+const cityBuildingColors = [0x3a2f5c, 0x2f4a5c, 0x4a3a5c, 0x2f5c4a];
+for (let i=0;i<9;i++){
+  const w = 1.2 + Math.random()*1.2;
+  const h = 2 + Math.random()*4;
+  const d = 1.2 + Math.random()*1.2;
+  const color = cityBuildingColors[i % cityBuildingColors.length];
+  const mat = new THREE.MeshStandardMaterial({ color, roughness: 0.7, emissive: color, emissiveIntensity: 0.25 });
+  const building = new THREE.Mesh(new THREE.BoxGeometry(w,h,d), mat);
+  const ang = (i/9) * Math.PI * 2;
+  const rad = 4.5 + Math.random()*3;
+  building.position.set(Math.cos(ang)*rad, h/2 - 1 + Math.random()*1.5, Math.sin(ang)*rad - 3);
+  building.rotation.z = (Math.random()-0.5) * 0.25; // un po' storti, come nei sogni
+  building.rotation.y = Math.random()*Math.PI;
+  roomCity.add(building);
+  // qualche finestra accesa
+  for (let wcount=0; wcount<3; wcount++){
+    const win = new THREE.Mesh(new THREE.PlaneGeometry(0.18,0.22), new THREE.MeshBasicMaterial({ color: 0xffe9a8 }));
+    win.position.set((Math.random()-0.5)*w*0.6, (Math.random()-0.3)*h*0.4, d/2+0.01);
+    building.add(win);
+  }
+}
+// il solito orologio, ovviamente
+const clockCity = makeClock();
+clockCity.position.set(0, 2.2, -2.5);
+roomCity.add(clockCity);
+
+const doorCityToC = makeDoor('rgba(255,255,255,0.9)');
+doorCityToC.position.set(0, 1.3, -6.5);
+roomCity.add(doorCityToC);
+interactables.push({ mesh: doorCityToC, radius: 1.8, action: () => goToRoom(3) });
+
+// ---------- Stanza C: il vuoto di codice ----------
+const clockC = makeClock();
+clockC.position.set(2, 2.4, -2);
+roomC.add(clockC);
+
+function makePhoneBooth() {
+  const g = new THREE.Group();
+  const body = new THREE.Mesh(new THREE.BoxGeometry(1.1,2.6,1.1), new THREE.MeshStandardMaterial({ color:0x8a1a1a, roughness:0.5, emissive:0x330000, emissiveIntensity:0.3 }));
+  body.position.y = 1.3;
+  g.add(body);
+  const roof = new THREE.Mesh(new THREE.BoxGeometry(1.25,0.15,1.25), new THREE.MeshStandardMaterial({ color:0x3a0d0d }));
+  roof.position.y = 2.65;
+  g.add(roof);
+  const glassMat = new THREE.MeshStandardMaterial({ color:0x223344, transparent:true, opacity:0.5, roughness:0.3 });
+  const glass = new THREE.Mesh(new THREE.BoxGeometry(0.9,1.8,0.05), glassMat);
+  glass.position.set(0,1.4,0.58);
+  g.add(glass);
+  return g;
+}
+const phoneBooth = makePhoneBooth();
+phoneBooth.position.set(0, 0, -5);
+roomC.add(phoneBooth);
+interactables.push({ mesh: phoneBooth, radius: 1.8, action: () => wakeUp() });
+
+const doorCtoA = makeDoor('rgba(255,255,255,0.9)');
+doorCtoA.position.set(3.5, 1.3, -3);
+doorCtoA.rotation.y = -0.5;
+roomC.add(doorCtoA);
+interactables.push({ mesh: doorCtoA, radius: 1.8, action: () => goToRoom(0) });
+
+// ============================================================
+// STATO DELLE STANZE
+// ============================================================
+const ROOMS = [
+  { group: roomA, name: 'La Scala Impossibile', spawn: new THREE.Vector3(0, 0, 3), fog: 0x1a1330, sky: 0x6a3f7a },
+  { group: roomB, name: 'La Strada Capovolta',   spawn: new THREE.Vector3(0, 0, 3), fog: 0x141c26, sky: 0x2f4a6a },
+  { group: roomCity, name: 'La Città che Ricordo', spawn: new THREE.Vector3(0, 0, 3), fog: 0x241c30, sky: 0x3a2f5c },
+  { group: roomC, name: 'Il Vuoto di Codice',    spawn: new THREE.Vector3(0, 0, 2), fog: 0x081016, sky: 0x0e3a2a }
+];
+let roomIndex = 0;
+let gameState = 'intro'; // 'intro' finché non si preme "Inizia il sogno"
+const powers = { fly: false, speed: false, slowmo: false, telekinesis: false };
+let codeIntensity = 0.4;
+
+function setRoomVisibility() {
+  ROOMS.forEach((r,i) => r.group.visible = (gameState === 'dreaming') && (i === roomIndex));
+}
+function goToRoom(i) {
+  flashOverlay(0.85, 0.6);
+  roomIndex = ((i % ROOMS.length) + ROOMS.length) % ROOMS.length;
+  setRoomVisibility();
+  cameraRig.position.copy(ROOMS[roomIndex].spawn);
+  scene.fog.color.set(ROOMS[roomIndex].fog);
+  skyUniforms.bottomColor.value.set(ROOMS[roomIndex].sky);
+  drawInfo();
+}
+setRoomVisibility();
+
+function beginDream() {
+  flashOverlay(0.9, 0.7);
+  gameState = 'dreaming';
+  introGroup.visible = false;
+  goToRoom(0);
+}
+
+let awake = false;
+function wakeUp() {
+  flashOverlay(1, 1.2);
+  awake = true;
+  setTimeout(() => {
+    awake = false;
+    goToRoom(0);
+  }, 1300);
+}
+
+// ---------- Overlay glitch/fade (piano attaccato alla camera) ----------
+function makeStaticNoiseTexture() {
+  const c = document.createElement('canvas'); c.width = c.height = 128;
+  const ctx = c.getContext('2d');
+  const img = ctx.createImageData(128,128);
+  for (let i=0;i<img.data.length;i+=4){
+    const v = Math.random()*255;
+    img.data[i]=v; img.data[i+1]=v; img.data[i+2]=v; img.data[i+3]=255;
+  }
+  ctx.putImageData(img,0,0);
+  return new THREE.CanvasTexture(c);
+}
+const overlayMat = new THREE.MeshBasicMaterial({ map: makeStaticNoiseTexture(), transparent:true, opacity:0, depthTest:false });
+const overlayPlane = new THREE.Mesh(new THREE.PlaneGeometry(4,4), overlayMat);
+overlayPlane.position.set(0,0,-0.3);
+overlayPlane.renderOrder = 1000;
+camera.add(overlayPlane);
+let overlayTimer=0, overlayDuration=0, overlayPeak=0;
+function flashOverlay(peak, duration) { overlayPeak=peak; overlayDuration=duration; overlayTimer=duration; }
+function updateOverlay(dt) {
+  if (overlayTimer > 0) {
+    overlayTimer -= dt;
+    const k = Math.max(0, overlayTimer/overlayDuration);
+    overlayMat.opacity = Math.sin(k*Math.PI) * overlayPeak;
+  } else overlayMat.opacity = 0;
+}
+
+// ---------- Pannello info (nome stanza), attaccato alla camera ----------
+const infoCanvas = document.createElement('canvas'); infoCanvas.width=460; infoCanvas.height=90;
+const infoTex = new THREE.CanvasTexture(infoCanvas);
+const infoPlane = new THREE.Mesh(new THREE.PlaneGeometry(0.42,0.082), new THREE.MeshBasicMaterial({ map: infoTex, transparent:true, depthTest:false }));
+infoPlane.position.set(0,-0.3,-0.68);
+infoPlane.renderOrder = 999;
+camera.add(infoPlane);
+function drawInfo() {
+  const ctx = infoCanvas.getContext('2d');
+  ctx.clearRect(0,0,460,90);
+  ctx.fillStyle = 'rgba(15,10,25,0.5)'; ctx.fillRect(0,0,460,90);
+  ctx.fillStyle = '#eef0f6'; ctx.font = '22px Segoe UI, sans-serif';
+  ctx.fillText(ROOMS[roomIndex].name, 18, 38);
+  ctx.font = '13px Segoe UI, sans-serif'; ctx.fillStyle = 'rgba(255,255,255,0.7)';
+  ctx.fillText('Sfera sul polso: poteri — grilletto: tocca/interagisci', 18, 64);
+  infoTex.needsUpdate = true;
+}
+drawInfo();
+
+// ============================================================
+// MENU DEI COMANDI (world-space, apribile col tasto A/X)
+// ============================================================
+const menuGroup = new THREE.Group();
+menuGroup.visible = false;
+scene.add(menuGroup);
+
+const menuButtons = [];
+function buildMenu() {
+  // sfondo pannello (più alto per contenere tutti i poteri)
+  const bg = new THREE.Mesh(
+    new THREE.PlaneGeometry(0.64, 0.86),
+    new THREE.MeshBasicMaterial({ map: makeLabelTexture('', 512, 690, 1, 'rgba(20,12,35,0.9)'), transparent:true, depthTest:false, side:THREE.DoubleSide })
+  );
+  bg.renderOrder = 1500;
+  menuGroup.add(bg);
+
+  const titleTex = makeLabelTexture('Poteri del sogno', 460, 60, 28, null);
+  const title = new THREE.Mesh(new THREE.PlaneGeometry(0.5, 0.065), new THREE.MeshBasicMaterial({ map:titleTex, transparent:true, depthTest:false, side:THREE.DoubleSide }));
+  title.position.set(0, 0.375, 0.001);
+  title.renderOrder = 1501;
+  menuGroup.add(title);
+
+  const labels = [
+    () => '⚡ Volo: ' + (powers.fly ? 'ON' : 'OFF'),
+    () => '⚡ Velocità: ' + (powers.speed ? 'ON' : 'OFF'),
+    () => '⚡ Rallentamento: ' + (powers.slowmo ? 'ON' : 'OFF'),
+    () => '⚡ Telecinesi: ' + (powers.telekinesis ? 'ON' : 'OFF'),
+    () => 'Stanza successiva →',
+    () => '← Stanza precedente',
+    () => 'Pioggia di codice: ' + (codeIntensity > 0.6 ? 'intensa' : 'normale'),
+    () => 'Svegliati',
+    () => 'Chiudi menu'
+  ];
+  const actions = [
+    () => { powers.fly = !powers.fly; refreshMenuLabels(); },
+    () => { powers.speed = !powers.speed; refreshMenuLabels(); },
+    () => { powers.slowmo = !powers.slowmo; refreshMenuLabels(); },
+    () => { powers.telekinesis = !powers.telekinesis; refreshMenuLabels(); },
+    () => goToRoom(roomIndex + 1),
+    () => goToRoom(roomIndex - 1),
+    () => { codeIntensity = codeIntensity > 0.6 ? 0.4 : 0.85; codeCylinder.material.opacity = codeIntensity; refreshMenuLabels(); },
+    () => { closeMenu(); wakeUp(); },
+    () => closeMenu()
+  ];
+
+  labels.forEach((getLabel, i) => {
+    const y = 0.29 - i * 0.075;
+    const mat = new THREE.MeshBasicMaterial({ map: makeLabelTexture(getLabel(), 460, 70, 20, 'rgba(255,255,255,0.06)'), transparent:true, depthTest:false, side:THREE.DoubleSide });
+    const btn = new THREE.Mesh(new THREE.PlaneGeometry(0.54, 0.064), mat);
+    btn.position.set(0, y, 0.002);
+    btn.renderOrder = 1502;
+    btn.userData.action = actions[i];
+    btn.userData.getLabel = getLabel;
+    menuGroup.add(btn);
+    menuButtons.push(btn);
+  });
+}
+buildMenu();
+function refreshMenuLabels() {
+  menuButtons.forEach(btn => {
+    btn.material.map = makeLabelTexture(btn.userData.getLabel(), 460, 70, 20, btn.userData.hover ? 'rgba(122,92,255,0.35)' : 'rgba(255,255,255,0.06)');
+    btn.material.needsUpdate = true;
+  });
+}
+
+let menuOpen = false;
+function openMenu() {
+  const quat = camera.getWorldQuaternion(new THREE.Quaternion());
+  const pos = new THREE.Vector3();
+  camera.getWorldPosition(pos);
+  const forward = new THREE.Vector3(0,0,-1).applyQuaternion(quat);
+  menuGroup.position.copy(pos).addScaledVector(forward, 0.5);
+  menuGroup.quaternion.copy(quat);
+  refreshMenuLabels();
+  menuGroup.visible = true;
+  menuOpen = true;
+}
+function closeMenu() {
+  menuGroup.visible = false;
+  menuOpen = false;
+}
+
+// ============================================================
+// CONTROLLER + MANI VISIBILI
+// ============================================================
+function makeHandMesh(color) {
+  const g = new THREE.Group();
+  const skinMat = new THREE.MeshStandardMaterial({ color, roughness: 0.55 });
+  // guanto semplice: un'unica forma arrotondata, niente dita separate da orientare male
+  const glove = new THREE.Mesh(new THREE.SphereGeometry(0.05, 12, 10), skinMat);
+  glove.scale.set(1.3, 0.85, 1.7);
+  glove.position.set(0, 0, -0.03);
+  g.add(glove);
+  const wrist = new THREE.Mesh(new THREE.CylinderGeometry(0.028,0.032,0.06,10), skinMat);
+  wrist.rotation.x = Math.PI/2;
+  wrist.position.set(0,0,0.03);
+  g.add(wrist);
+  return g;
+}
+
+const controller0 = renderer.xr.getController(0);
+const controller1 = renderer.xr.getController(1);
+const handMesh0 = makeHandMesh(0xd8a878);
+const handMesh1 = makeHandMesh(0xd8a878);
+[[controller0, handMesh0], [controller1, handMesh1]].forEach(([controller, handMesh]) => {
+  controller.addEventListener('connected', (e) => {
+    controller.userData.handedness = e.data.handedness;
+    controller.userData.gamepad = e.data.gamepad;
+    controller.userData.prevButtons = [];
+    // specchia il modello della mano se è la sinistra, così il pollice sta dal lato giusto
+    handMesh.scale.x = (e.data.handedness === 'left') ? -1 : 1;
+  });
+  controller.addEventListener('disconnected', () => {
+    controller.userData.handedness = null;
+    controller.userData.gamepad = null;
+  });
+  scene.add(controller);
+});
+const grip0 = renderer.xr.getControllerGrip(0);
+grip0.add(handMesh0);
+scene.add(grip0);
+const grip1 = renderer.xr.getControllerGrip(1);
+grip1.add(handMesh1);
+scene.add(grip1);
+
+// ---------- Pulsante dei poteri sul polso (tocca con l'altra mano per aprire il menu) ----------
+const wristButton = new THREE.Mesh(
+  new THREE.SphereGeometry(0.035, 16, 12),
+  new THREE.MeshStandardMaterial({ color: 0x7a5cff, emissive: 0x7a5cff, emissiveIntensity: 0.8, roughness: 0.3 })
+);
+wristButton.position.set(0, 0.075, 0.02);
+grip0.add(wristButton);
+const wristGlow = new THREE.Sprite(new THREE.SpriteMaterial({ map: makeGlowTexture('rgba(122,92,255,0.9)'), transparent:true, depthWrite:false, blending:THREE.AdditiveBlending }));
+wristGlow.scale.set(0.16,0.16,1);
+wristGlow.position.copy(wristButton.position);
+grip0.add(wristGlow);
+
+// ---------- Aiuto: "tocco" (distanza) tra due punti nel mondo ----------
+const _touchA = new THREE.Vector3();
+const _touchB = new THREE.Vector3();
+function isTouching(object3D, targetObject3D, radius) {
+  object3D.getWorldPosition(_touchA);
+  targetObject3D.getWorldPosition(_touchB);
+  return _touchA.distanceTo(_touchB) < radius;
+}
+
+const raycaster = new THREE.Raycaster();
+let lastSnapTime = 0;
+let elapsed = 0;
+
+function updateMenuHover(controller) {
+  const origin = new THREE.Vector3(); controller.getWorldPosition(origin);
+  const quat = new THREE.Quaternion(); controller.getWorldQuaternion(quat);
+  const dir = new THREE.Vector3(0,0,-1).applyQuaternion(quat);
+  raycaster.set(origin, dir);
+  const hits = raycaster.intersectObjects(menuButtons, false);
+  let hovered = hits.length ? hits[0].object : null;
+  menuButtons.forEach(btn => {
+    const isHover = btn === hovered;
+    if (btn.userData.hover !== isHover) {
+      btn.userData.hover = isHover;
+      btn.material.map = makeLabelTexture(btn.userData.getLabel(), 460, 70, 20, isHover ? 'rgba(122,92,255,0.4)' : 'rgba(255,255,255,0.06)');
+      btn.material.needsUpdate = true;
+    }
+  });
+  return hovered;
+}
+
+function updateInput(dt) {
+  [controller0, controller1].forEach(controller => {
+    const gp = controller.userData.gamepad;
+    if (!gp) return;
+    const hand = controller.userData.handedness;
+    const axes = gp.axes || [];
+    const buttons = gp.buttons || [];
+    const prev = controller.userData.prevButtons || [];
+    const triggerDown = buttons[0] && buttons[0].pressed;
+    const triggerEdge = triggerDown && !prev[0];
+
+    // ---- fase intro: solo il pulsante "Inizia il sogno" risponde ----
+    if (gameState === 'intro') {
+      const myGrip = (controller === controller0) ? grip0 : grip1;
+      if (isTouching(myGrip, introButton, 0.3)) {
+        introBtnMat.map = makeLabelTexture('✨ Inizia il sogno', 460, 110, 30, 'rgba(122,92,255,0.65)');
+        introBtnMat.needsUpdate = true;
+        if (triggerEdge) beginDream();
+      } else {
+        introBtnMat.map = makeLabelTexture('✨ Inizia il sogno', 460, 110, 30, 'rgba(122,92,255,0.35)');
+        introBtnMat.needsUpdate = true;
+      }
+      controller.userData.prevButtons = buttons.map(b => !!b.pressed);
+      return;
+    }
+
+    if (!menuOpen && !awake && hand === 'left' && powers.fly) {
+      const x = axes[2] || 0, y = axes[3] || 0;
+      if (Math.hypot(x,y) > 0.15) {
+        const quat = camera.getWorldQuaternion(new THREE.Quaternion());
+        const forward = new THREE.Vector3(0,0,-1).applyQuaternion(quat);
+        const right = new THREE.Vector3(1,0,0).applyQuaternion(quat);
+        const move = new THREE.Vector3();
+        move.addScaledVector(forward, -y);
+        move.addScaledVector(right, x);
+        if (move.lengthSq() > 0) {
+          const speed = (powers.speed ? 4.6 : 2.2) * dt;
+          move.normalize().multiplyScalar(speed);
+          cameraRig.position.add(move);
+        }
+      }
+    } else if (!menuOpen && hand === 'right') {
+      const x = axes[2] || 0;
+      if (Math.abs(x) > 0.6 && elapsed - lastSnapTime > 0.35) {
+        cameraRig.rotation.y -= Math.sign(x) * (Math.PI/6);
+        lastSnapTime = elapsed;
+      }
+    }
+
+    // A/X: apri/chiudi il menu
+    if (buttons[4] && buttons[4].pressed && !prev[4]) {
+      if (menuOpen) closeMenu(); else openMenu();
+    }
+    // tocca la sfera sul polso (con l'altra mano) per aprire/chiudere il menu
+    if (controller === controller1 && triggerEdge && isTouching(grip1, wristButton, 0.09)) {
+      if (menuOpen) closeMenu(); else openMenu();
+    }
+
+    // grilletto: seleziona voce di menu, oppure interagisci con la scena
+    if (triggerEdge) {
+      if (menuOpen) {
+        const myGrip = (controller === controller0) ? grip0 : grip1;
+        let touched = null;
+        for (const btn of menuButtons) {
+          if (isTouching(myGrip, btn, 0.075)) { touched = btn; break; }
+        }
+        const hovered = touched || updateMenuHover(controller);
+        if (hovered && hovered.userData.action) hovered.userData.action();
+      } else if (!awake) {
+        for (const it of interactables) {
+          if (it.mesh.parent && it.mesh.parent.visible !== false && cameraRig.position.distanceTo(it.mesh.getWorldPosition(new THREE.Vector3())) < it.radius) {
+            it.action();
+            break;
+          }
+        }
+      }
+    }
+
+    // telecinesi: tieni il grilletto premuto per attirare il cristallo più vicino
+    if (!menuOpen && !awake && powers.telekinesis && triggerDown) {
+      const handPos = new THREE.Vector3(); controller.getWorldPosition(handPos);
+      let nearest = null, nearestDist = 6;
+      debris.forEach(m => {
+        const d = m.position.distanceTo(handPos);
+        if (d < nearestDist) { nearestDist = d; nearest = m; }
+      });
+      if (nearest) nearest.position.lerp(handPos, Math.min(1, dt * 4));
+    }
+
+    if (menuOpen) updateMenuHover(controller);
+
+    controller.userData.prevButtons = buttons.map(b => !!b.pressed);
+  });
+}
+
+// ---------- Loop ----------
+const clock = new THREE.Clock();
+function updateDebris(dt, t) {
+  debris.forEach((m,i) => {
+    m.rotation.x += dt*0.25; m.rotation.y += dt*0.35;
+    m.position.y += Math.sin(t*0.4+i)*0.002;
+  });
+}
+function animate() {
+  const rawDt = Math.min(clock.getDelta(), 0.05);
+  elapsed += rawDt;
+  const dt = powers.slowmo ? rawDt * 0.35 : rawDt;
+
+  updateInput(rawDt);
+  updateDebris(dt, elapsed);
+  updateOverlay(rawDt);
+  codeCylinder.material.map.offset.y += dt * 0.1;
+  glow.intensity = 1.0 + Math.sin(elapsed*0.8)*0.15;
+  if (gameState === 'intro') {
+    introShapes.forEach(m => {
+      m.rotation.x += rawDt * m.userData.spinX;
+      m.rotation.y += rawDt * m.userData.spinY;
+      m.position.y = m.userData.baseY + Math.sin(elapsed*0.7 + m.userData.bobPhase) * 0.15;
+    });
+  }
+
+  if (!renderer.xr.isPresenting) previewControls.update();
+  renderer.render(scene, camera);
+}
+renderer.xr.addEventListener('sessionstart', () => document.getElementById('ui').classList.add('hidden'));
+renderer.xr.addEventListener('sessionend', () => document.getElementById('ui').classList.remove('hidden'));
+
+renderer.setAnimationLoop(animate);
+</script>
+</body>
+</html>
